@@ -6,6 +6,9 @@ import { TIERS, taskIdOf, tierOf } from './tiers'
 
 const NOTE_MAX = 200
 const STEP_MAX = 1000
+/** How many of an agent's latest tools it keeps by name. */
+export const TOOLS_KEPT = 3
+const OWN_TOOLS = 'mcp__spider-progress__'
 
 /** A spawned agent joins the list as running; a second spawn event for the same id changes nothing. */
 export function spawned(list: SpiderAgent[], a: { agentId: string; type?: string; model?: string; prompt: string; now: number }, limit: number): SpiderAgent[] {
@@ -31,7 +34,7 @@ export function spawned(list: SpiderAgent[], a: { agentId: string; type?: string
 export function resumed(list: SpiderAgent[], agentId: string, now: number): SpiderAgent[] {
   const agent = list.find(a => a.agentId === agentId && a.status !== 'running')
   if (!agent) return list
-  const { endedAt: _ended, ...rest } = agent
+  const { endedAt: _ended, endReason: _reason, ...rest } = agent
   return replace(list, agent, { ...rest, status: 'running', lastUpdate: now })
 }
 
@@ -88,13 +91,29 @@ export function stepReported(list: SpiderAgent[], agentId: string | undefined, i
   return { list: replace(list, agent, { ...agent, steps, lastUpdate: now }), text }
 }
 
+/** A tool as the pane names it: an MCP tool by its own name; the plugin's own tools are reporting, not activity. */
+export function toolName(tool: string): string | undefined {
+  if (tool.startsWith(OWN_TOOLS)) return undefined
+  return tool.startsWith('mcp__') ? tool.slice(tool.lastIndexOf('__') + 2) || tool : tool
+}
+
+/** A running agent called a tool: its latest tools by name, its call count and, when the call failed, its error count. */
+export function toolUsed(list: SpiderAgent[], agentId: string, tool: string, failed: boolean, now: number): SpiderAgent[] {
+  const name = toolName(tool)
+  const agent = list.find(a => a.agentId === agentId && a.status === 'running')
+  if (!name || !agent) return list
+  const was = agent.activity ?? { tools: [], calls: 0, errors: 0 }
+  const activity = { tools: [...was.tools, name].slice(-TOOLS_KEPT), calls: was.calls + 1, errors: was.errors + (failed ? 1 : 0) }
+  return replace(list, agent, { ...agent, activity, lastUpdate: now })
+}
+
 /** A running agent's turn ended: `answer` is done, an abort is cancelled, anything else failed; usage no step reported is taken from the end. */
 export function agentEnded(list: SpiderAgent[], agentId: string, reason: string, now: number, usage?: unknown): SpiderAgent[] {
   const agent = list.find(a => a.agentId === agentId && a.status === 'running')
   if (!agent) return list
   const status = reason === 'answer' ? 'done' : reason === 'aborted' ? 'cancelled' : 'failed'
   const base = agent.requests === 0 && usage !== undefined ? used(agent, agent.model, usage, now, false) : agent
-  return replace(list, agent, { ...base, status, endedAt: now, lastUpdate: now })
+  return replace(list, agent, { ...base, status, endedAt: now, lastUpdate: now, ...(status === 'failed' ? { endReason: reason } : {}) })
 }
 
 /** The run's agents: those started while it was open, and the workers its tasks list, resumed ones included. */

@@ -1,60 +1,48 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderRun, SpiderTask } from '../types'
-import { bandLines } from '../hooks/band'
+import { bandLine } from '../hooks/band'
 import type { Piece } from '../hooks/text'
 
-const task = (id: string, state: SpiderTask['state']): SpiderTask => ({ id, title: id, owner: 'main', after: [], state, attempts: 1, errors: [], agentIds: [] })
-const RUN: SpiderRun = { runId: 'r', title: 'Implement authentication', phase: 'review', startedAt: 0, tasks: [task('T1', 'completed'), task('T2', 'completed'), task('T3', 'running'), task('T4', 'pending')] }
-const text = (line: Piece[] | undefined) => (line ?? []).map(p => p.text).join('')
-const draw = (over: Partial<Parameters<typeof bandLines>[0]> = {}) => bandLines({ run: RUN, running: 3, agents: 3, columns: 60, lang: 'en', frame: 0, animations: false, ...over })
+const task = (id: string, state: SpiderTask['state'], owner: SpiderTask['owner'] = 'main'): SpiderTask => ({ id, title: id, owner, after: [], state, attempts: 1, errors: [], agentIds: [] })
+const RUN: SpiderRun = { runId: 'r', title: 'Implement authentication', phase: 'execute', startedAt: 0, tasks: [task('T1', 'completed'), task('T2', 'completed'), task('T3', 'running'), task('T4', 'reviewing', 'worker'), task('T5', 'pending')] }
+const text = (line: Piece[]) => line.map(p => p.text).join('')
+const draw = (over: Partial<Parameters<typeof bandLine>[0]> = {}) => bandLine({ run: RUN, running: 2, agents: 3, lastTool: 'Grep', columns: 120, lang: 'en', frame: 0, animations: false, ...over })
 
-test('the band shows title, bar with percent and phase · accepted/total · agents', () => {
-  const lines = draw()
-  expect(lines.length).toBe(3)
-  expect(text(lines[0])).toBe('SPIDER TEAM · Implement authentication')
-  expect(text(lines[1])).toMatch(/^━+░+ 50%$/)
-  expect([...text(lines[1])].length).toBe(60)
-  expect(text(lines[2])).toBe('Review · 2/4 tasks · 3 agents')
+test('the band is one line: mark, counts, tasks in progress, agents running and the latest tool', () => {
+  expect(text(draw())).toBe('● spider · 2 accepted / 2 running / 1 left │ T3 main  T4 worker │ 2 agents · Grep')
+  expect(text(draw({ lang: 'pt-BR', running: 1 }))).toBe('● spider · 2 aceitas / 2 rodando / 1 falta │ T3 main  T4 worker │ 1 agente · Grep')
+  expect(text(draw({ running: 0 }))).not.toContain('Grep')
 })
 
-test('before a plan has a total the bar is indeterminate and shows no percent', () => {
-  const line = text(draw({ run: { ...RUN, phase: 'plan', tasks: [] } })[1])
-  expect(line).not.toMatch(/%/)
-  expect(line).toContain('░')
-  expect(text(draw({ run: { ...RUN, phase: 'plan', tasks: [] } })[2])).toBe('Plan · 0/0 tasks · 3 agents')
+test('a count of one takes the singular word', () => {
+  const run = { ...RUN, tasks: [task('T1', 'completed'), task('T2', 'pending'), task('T3', 'failed')] }
+  expect(text(draw({ run, lang: 'pt-BR', running: 0 }))).toBe('● spider · 1 aceita / 0 rodando / 1 falta / 1 falhou │ 0 agentes')
 })
 
-test('a narrow band cuts the title and keeps the counts', () => {
-  const lines = draw({ columns: 40, run: { ...RUN, title: 'x'.repeat(120) } })
-  expect([...text(lines[0])].length).toBe(40)
-  expect(text(lines[0]).endsWith('…')).toBe(true)
-  expect(text(lines[2])).toContain('2/4 tasks')
-  expect([...text(lines[1])].length).toBe(40)
+test('failed tasks are counted in error, and the mark shows how the run ended', () => {
+  const line = draw({ run: { ...RUN, tasks: [...RUN.tasks, task('T6', 'failed')] } })
+  expect(line.find(p => p.text.includes('1 failed'))!.style).toBe('error')
+  expect(draw({ run: { ...RUN, phase: 'complete' } })[0]).toEqual({ text: '✓', style: 'ok' })
+  expect(draw({ run: { ...RUN, phase: 'failed' } })[0]).toEqual({ text: '✗', style: 'error' })
+  expect(draw({ running: 0 })[0]).toEqual({ text: '●', style: 'dim' })
 })
 
-test('the band uses pt-BR strings when asked', () => {
-  const lines = draw({ lang: 'pt-BR', running: 1 })
-  expect(text(lines[2])).toBe('Revisão · 2/4 tarefas · 1 agente')
-})
-
-test('a running agent shows a spinner only with animations on, and a finished or failed run is coloured', () => {
-  expect(text(draw({ animations: true, frame: 1 })[2]).startsWith('⠙ ')).toBe(true)
-  expect(text(draw({ animations: true, running: 0 })[2]).startsWith('Review')).toBe(true)
-  expect(draw({ run: { ...RUN, phase: 'complete' } })[2]![0]!.style).toBe('ok')
-  expect(draw({ run: { ...RUN, phase: 'failed' } })[2]![0]!.style).toBe('error')
-})
-
-test('the status line leaves room for the buttons and cuts the phase before the counts', () => {
-  const tasks = Array.from({ length: 12 }, (_, i) => task(`T${i + 1}`, 'pending'))
-  for (const [lang, phase] of [['pt-BR', 'investigate'], ['pt-BR', 'execute'], ['en', 'investigate']] as const) {
-    const line = text(draw({ columns: 40, lang, running: 3, agents: 3, run: { ...RUN, phase, tasks } })[2])
-    expect([...line].length).toBeLessThanOrEqual(40 - [...'×3 ✕'].length)
-    expect(line).toMatch(/0\/12 (tarefas|tasks) · 3 (agentes|agents)$/)
+test('a narrow band leaves room for the buttons, drops the tool, then the tasks, and cuts the counts last', () => {
+  for (const columns of [70, 60, 40, 20]) {
+    const line = text(draw({ columns }))
+    expect([...line].length).toBeLessThanOrEqual(columns - [...'×3 ✕'].length - 1)
   }
+  expect(text(draw({ columns: 80 }))).toBe('● spider · 2 accepted / 2 running / 1 left │ T3 main  T4 worker │ 2 agents')
+  expect(text(draw({ columns: 64 }))).toBe('● spider · 2 accepted / 2 running / 1 left │ 2 agents')
+  expect(text(draw({ columns: 40 })).endsWith('…')).toBe(true)
 })
 
-test('with animations off the indeterminate bar stands still', () => {
-  const open = { ...RUN, phase: 'plan' as const, tasks: [] }
-  expect(text(draw({ run: open, frame: 7 })[1])).toBe(text(draw({ run: open, frame: 0 })[1]))
-  expect(text(draw({ run: open, frame: 7, animations: true })[1])).not.toBe(text(draw({ run: open, frame: 0, animations: true })[1]))
+test('a running agent shows a spinner only with animations on', () => {
+  expect(draw({ animations: true, frame: 1 })[0]!.text).toBe('⠙')
+  expect(draw({ animations: false, frame: 1 })[0]!.text).toBe('●')
+})
+
+test('tasks the run cancelled stay in the band counts', () => {
+  const run: SpiderRun = { ...RUN, phase: 'cancelled', tasks: [task('T1', 'completed'), { ...task('T2', 'cancelled'), cancelledWithRun: true }, task('T3', 'cancelled')] }
+  expect(text(draw({ run, running: 0 }))).toBe('– spider · 1 accepted / 0 running / 0 left / 1 cancelled │ 0 agents')
 })

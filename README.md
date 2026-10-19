@@ -13,7 +13,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
 | [image-preview](plugins/image-preview/README.md) | Shows images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads under its row in the transcript, as the desktop app does. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors. |
-| [spider-progress](plugins/spider-progress/README.md) | A band under the session card that follows a spider-team run (phase, accepted tasks, running agents) and a `/spider-agents` pane with each subagent's model, effort, steps, tokens, context, estimated cost and time; it lists any subagent without spider-team too. |
+| [spider-progress](plugins/spider-progress/README.md) | A one-line band under the session card that follows a spider-team run (plan counts, tasks in progress, running agents) and a `/spider-agents` pane in bordered sections: the plan as a tree, each running agent with its model, effort, context, steps, tokens, cost, time and latest tools, recent agents, a 15-minute timeline and totals; it lists any subagent without spider-team too. |
 | [spider-team](plugins/spider-team/README.md) | `/spider-team <task>`: the session owns and implements the task, plans it with dependencies, calls a read-only planner or reviewer (Opus) and a researcher (Haiku) when they help, splits off parallel workers (Sonnet) only when independent parts gain from it, reviews what comes back against the real diff and verifies the integrated result before delivering; a new project in an empty directory starts with a spec and a plan for your approval; `/spider-team on` keeps appending each later request to one task list. |
 | [subagent-effort](plugins/subagent-effort/README.md) | Sets the reasoning effort of every native subagent call from Jev's rating of its task, leaving the model as it was, and keeps local records to compare efforts. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
@@ -22,7 +22,7 @@ Each plugin README covers its setup, what it reads, sends and saves, and what it
 
 ## Install
 
-Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.301 (`claude --version`).
+Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.303 (`claude --version`).
 
 ```
 /plugin marketplace add anderson-spider/claude-mods
