@@ -5,7 +5,7 @@ import type { BuiltinToolInputs } from 'claude-code'
 import { classifyFailure, createJev, JevFailure } from './jev'
 import type { Answers, Breaker, Gate, JevFailureReason, JevIo, JevUsage } from './jev'
 import { resolveAccess } from './key'
-import type { KeyIo, Off } from './key'
+import type { KeyIo, KeySources, Off } from './key'
 import { head, redact, REDACTED } from './redact'
 
 export type Effort = NonNullable<BuiltinToolInputs['Agent']['effort']>
@@ -88,7 +88,7 @@ export function clipped(text: string, key: string, ctx: { home: string; root: st
 export type EffortIo = KeyIo & { jev: JevIo; breaker: Breaker; gate: Gate; log: (text: string) => void }
 
 /** Jev rates the task and its level is the effort; any failure is no effort, with the reason. */
-export async function assessEffort(io: EffortIo, call: { task: string; key?: string; home: string; root: string }): Promise<Choice> {
+export async function assessEffort(io: EffortIo, call: { task: string; keys: KeySources; home: string; root: string }): Promise<Choice> {
   let startedAt: number | null = null
   const elapsed = () => { try { return startedAt !== null ? Math.max(0, io.jev.now() - startedAt) : null } catch { return null } }
   const off = (jevReason: JevReason): Choice => {
@@ -96,7 +96,7 @@ export async function assessEffort(io: EffortIo, call: { task: string; key?: str
     return { effort: null, level: null, top: null, jevReason, jevMs: elapsed(), jevTokens: null }
   }
   try {
-    const access = await resolveAccess(io, call.key)
+    const access = await resolveAccess(io, call.keys)
     if (access.key === undefined) return off(access.off)
     const state = clipped(call.task, access.key, call)
     const jev = { ...io.jev, fetch: (url: string, init: Parameters<JevIo['fetch']>[1]) => { startedAt ??= io.jev.now(); return io.jev.fetch(url, init) } }

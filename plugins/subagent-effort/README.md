@@ -8,7 +8,7 @@ Sets the reasoning effort of every native subagent call from Jev's rating of its
 
 ## Setup
 
-Set `JEV_API_KEY` where Claude Code inherits it (your shell profile for the terminal, `launchctl setenv` for the macOS desktop app) and restart Claude Code. A key declared in a repository's `.claude/settings.json` or `.claude/settings.local.json` is refused, so a repository cannot choose the account that receives your tasks. Without a usable key, subagent calls go as they came and a toast says why, once per reason per load.
+Set the `apiKey` plugin option (a sensitive field, kept in secure storage) from the plugin's configuration in `/plugin`, in your user options. When the option is not set, the plugin uses `JEV_API_KEY` from the environment: set it where Claude Code inherits it (your shell profile for the terminal, `launchctl setenv` for the macOS desktop app) and restart Claude Code. A malformed option is reported, not replaced by the environment. A key that a repository's `.claude/settings.json` or `.claude/settings.local.json` declares for the source in use (`pluginConfigs` with this plugin's `apiKey`, or `env` with `JEV_API_KEY`) is refused, so a repository cannot choose the account that receives your tasks. Without a usable key, subagent calls go as they came and a toast says why, once per reason per load.
 
 ## How it routes
 
@@ -33,11 +33,11 @@ A continuation through `SendMessage` is not an `Agent` call, so it keeps the eff
 
 ## Records
 
-Each decision records the effort the call came with and the one the agent runs with, and the Jev call's own latency, the input and output tokens Jev reported and their estimated cost, apart from the subagent's duration and tokens. The cost charges input tokens at US$0.042 per million and output tokens at nothing, the published Jev rate as of October 2026 taken from gateway docs, so it is an estimate until an invoice confirms it. `/subagent-effort-stats` says whether Jev is reachable in this session and summarizes the records: decisions by source (Jev, with how many replaced a different effort from the call, and Jev off with its reasons), the Jev calls with their median latency, tokens and estimated cost, and for each model family and effort (`haiku/low`, `opus/usual` when no effort was set) the runs, failures and median duration and tokens; a call that a hook or the permission check denied never ran and is not counted.
+Each decision records the effort the call came with and the one the agent runs with, and the Jev call's own latency, the input and output tokens Jev reported and their estimated cost, apart from the subagent's duration and tokens. The cost charges input tokens at US$0.042 per million and output tokens at nothing, the published Jev rate as of October 2026 taken from gateway docs, so it is an estimate until an invoice confirms it. `/subagent-effort-stats` says whether Jev is reachable in this session, and from which source its key came, and summarizes the records: decisions by source (Jev, with how many replaced a different effort from the call, and Jev off with its reasons), the Jev calls with their median latency, tokens and estimated cost, and for each model family and effort (`haiku/low`, `opus/usual` when no effort was set) the runs, failures and median duration and tokens; a call that a hook or the permission check denied never ran and is not counted.
 
 ## Privacy
 
-- **Sent to Jev** (`api.typesafe.ai`): the task text of each routed call, after paths under your home and the repository, email addresses, the key itself and secret-looking values are masked, cut to 4000 characters. Nothing is sent for a fork, an empty task, or when the key is missing.
+- **Sent to Jev** (`api.typesafe.ai`): the task text of each routed call, after paths under your home and the repository, email addresses, the key itself and secret-looking values are masked, cut to 4000 characters. Nothing is sent for a fork, an empty task, or when the key is missing, invalid or refused.
 - **Saved locally** in `~/.claude/subagent-effort/routes.jsonl` (one rotated generation past about 2 MB): ids, the agent type, the effort the call came with and the one applied, who decided it, Jev's confidence, latency, reported tokens and estimated cost, the brief's length in characters, and for each finished run its resolved model (the model the call named when the host reports none), status, duration and token count. Never the task, the prompt, the answer, a path or the key.
 
 ## Tests

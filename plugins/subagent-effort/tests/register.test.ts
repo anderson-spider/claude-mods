@@ -183,8 +183,30 @@ test('the stats command checks Jev access the way routing does, summarizes the r
   h.env.JEV_API_KEY = 'test-key'
   await settle($.tool.call(call() as never))
   const text = (await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text
-  expect(text).toMatch(/^Jev access in this session: ok\.\n1 decisions: Jev 1, Jev off 0\.\nJev calls: 1, median \d+ms, 300 input and 20 output tokens, about \$0\.000013 \(estimated\)\.\nhaiku\/low: 1 runs, median 42s and 2k tokens$/)
+  expect(text).toMatch(/^Jev access in this session: ok \(key from JEV_API_KEY\)\.\n1 decisions: Jev 1, Jev off 0\.\nJev calls: 1, median \d+ms, 300 input and 20 output tokens, about \$0\.000013 \(estimated\)\.\nhaiku\/low: 1 runs, median 42s and 2k tokens$/)
   expect(text).not.toContain('test-key')
   h.fsFaults.read = true
-  expect((await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text).toBe('Jev access in this session: ok.\nthe routing records could not be read.')
+  expect((await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text).toBe('Jev access in this session: ok (key from JEV_API_KEY).\nthe routing records could not be read.')
+})
+
+const OPTION_KEY = ['option-', 'test', '-key'].join('')
+test('the apiKey option is the key Jev gets, over JEV_API_KEY, and the stats command names its source', { options: { apiKey: OPTION_KEY } }, async ($, on) => {
+  const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'env-test-key'
+  await started($)
+  await settle($.tool.call(call() as never))
+  expect(h.requests[0]!.headers.Authorization).toBe(`Bearer ${OPTION_KEY}`)
+  expect(received[0]).toHaveProperty('effort', 'low')
+  const text = (await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text
+  expect(text.split('\n')[0]).toBe('Jev access in this session: ok (key from the apiKey option).')
+  expect(text).not.toContain(OPTION_KEY)
+})
+
+test('an apiKey option that the repository settings declare turns Jev off and sends nothing', { options: { apiKey: OPTION_KEY } }, async ($, on) => {
+  const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'env-test-key'
+  h.io.settings = async () => ({ pluginConfigs: { 'subagent-effort@spider-claude-mods': { options: { apiKey: 'repo-key-123' } } } })
+  await started($)
+  await settle($.tool.call(call() as never))
+  expect(h.requests).toHaveLength(0)
+  expect(received[0]).not.toHaveProperty('effort')
+  expect(h.toasts).toEqual([`Jev off (repo-declared-key): ${OFF_TEXT['repo-declared-key']} Subagent calls go as they came.`])
 })

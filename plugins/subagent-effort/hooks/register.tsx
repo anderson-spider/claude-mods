@@ -2,7 +2,7 @@ import type { BuiltinToolInputs, Hook, Register } from 'claude-code'
 import { assessEffort } from './effort'
 import type { Effort, EffortIo } from './effort'
 import { createBreaker, createGate } from './jev'
-import { isOff, OFF_TEXT, resolveAccess } from './key'
+import { ENV_NAME, isOff, OFF_TEXT, resolveAccess } from './key'
 import { afterAgentCall, afterTurn, appendLine, createPending, decisionLine, formatSummary, ledgerPath, parseLedger, readAll, runsInBackground, summarize } from './ledger'
 import type { Context, FileIo, Line, TurnEnd } from './ledger'
 
@@ -15,7 +15,10 @@ export const DEFAULT_TYPE = 'general-purpose'
 const pool = { breaker: createBreaker(() => Date.now()), gate: createGate() }
 function io($: Dollar): EffortIo {
   return {
-    settings: async (source: 'project' | 'local') => ({ env: (await $.settings.read({ source })).env }),
+    settings: async (source: 'project' | 'local') => {
+      const settings = await $.settings.read({ source })
+      return { env: settings?.env, pluginConfigs: settings?.pluginConfigs }
+    },
     jev: {
       fetch: async (url, init) => {
         const r = await $.http.fetch(url, init)
@@ -45,10 +48,10 @@ async function record($: Dollar, what: string, line: Line) {
 }
 const stamp = () => new Date().toISOString()
 // Whether this process can reach Jev now, checked the way routing checks it; the ledger only tells what past calls saw.
-async function accessLine($: Dollar): Promise<string> {
+async function accessLine($: Dollar, option: unknown): Promise<string> {
   try {
-    const access = await resolveAccess(io($), await $.env.get('JEV_API_KEY'))
-    return access.key !== undefined ? 'Jev access in this session: ok.' : `Jev access in this session: off (${access.off}). ${OFF_TEXT[access.off]}`
+    const access = await resolveAccess(io($), { option, env: await $.env.get('JEV_API_KEY') })
+    return access.key !== undefined ? `Jev access in this session: ok (key from ${access.source === 'option' ? 'the apiKey option' : ENV_NAME}).` : `Jev access in this session: off (${access.off}). ${OFF_TEXT[access.off]}`
   } catch { return 'Jev access in this session: could not be checked.' }
 }
 // A configuration problem turns Jev off until the person fixes it, so it is shown once per reason in this load, not per call.
@@ -67,7 +70,7 @@ async function dispatched($: Dollar, ctx: Context, result: unknown, background: 
   })
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   // Background agents wait here for their turn.complete; module state of this load only, dropped on reload.
   const background = createPending(200)
   const warned = new Set<string>()
@@ -84,7 +87,7 @@ export const register: Register = on => {
     if (agentType === 'fork' || typeof call.prompt !== 'string' || !call.prompt.trim()) return next(e)
     const received: Effort | null = call.effort ?? null
     const choice = await assessEffort(io($), {
-      task: call.prompt, home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY'),
+      task: call.prompt, home: await $.env.get('HOME') ?? '', root: await $.session.root(), keys: { option: options.apiKey, env: await $.env.get('JEV_API_KEY') },
     })
     const effort: Effort | null = choice.effort ?? received
     $.ui.log(`subagent-effort: ${agentType} → ${choice.effort ?? `as it came (${choice.jevReason})`}`, { to: 'debug' })
@@ -112,7 +115,7 @@ export const register: Register = on => {
   // The host prefixes command output with the plugin name, so the texts below do not repeat it.
   on('command.run', { command: STATS_COMMAND }, async $ => {
     try {
-      const access = await accessLine($)
+      const access = await accessLine($, options.apiKey)
       const home = await $.env.get('HOME')
       if (!home) return { text: `${access}\nno home directory, so no routing records.` }
       try { return { text: `${access}\n${formatSummary(summarize(parseLedger(await readAll(files($), ledgerPath(home)))))}` } } catch { return { text: `${access}\nthe routing records could not be read.` } }

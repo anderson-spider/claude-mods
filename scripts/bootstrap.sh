@@ -112,6 +112,7 @@ for p in $PLUGINS; do
   case "$p" in
     codex-computer-use) echo '  - codex-computer-use: `/codex-cu status` should report the helper running' ;;
     coolify) echo '  - coolify needs its url and apiKey: `claude plugin configure coolify`' ;;
+    subagent-effort) echo '  - subagent-effort needs a Jev key: its apiKey (`claude plugin configure subagent-effort`) or JEV_API_KEY in the environment' ;;
     gitlab) echo '  - gitlab needs its tokens (host=token pairs): `claude plugin configure gitlab`' ;;
     tailscale) echo '  - tailscale needs its apiKey: `claude plugin configure tailscale`' ;;
   esac
