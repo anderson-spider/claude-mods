@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { checkRepo, citedTests, declaredTests } from "./check-consistency.mjs";
+import { SHARED_BLOCK_WORDS, checkRepo, citedTests, declaredTests } from "./check-consistency.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const script = fileURLToPath(new URL("./check-consistency.mjs", import.meta.url));
@@ -381,6 +381,21 @@ for (const { name, beta, expected } of [
     assert.deepEqual(problems(t, sharedSkills(beta)), expected);
   });
 }
+
+test("a shared block within the word budget passes, and one over it fails once, naming the first copy", (t) => {
+  const body = (count) => `${"word ".repeat(count).trim()}\n`;
+  const over = (files) => {
+    files["plugins/alpha/skills/s/SKILL.md"] += `<!-- shared: core -->\n${body(SHARED_BLOCK_WORDS + 1)}<!-- /shared: core -->\n`;
+    files["plugins/alpha/skills/t/SKILL.md"] = `---\nname: t\ndescription: Another skill.\n---\n<!-- shared: core -->\n${body(SHARED_BLOCK_WORDS + 1)}<!-- /shared: core -->\n`;
+  };
+  assert.deepEqual(problems(t, over), [
+    `alpha: skills/s/SKILL.md shared block "core" has ${SHARED_BLOCK_WORDS + 1} words, over ${SHARED_BLOCK_WORDS}: move what not every run needs to a file the skill links`,
+  ]);
+  const within = (files) => {
+    files["plugins/alpha/skills/s/SKILL.md"] += `<!-- shared: core -->\n${body(SHARED_BLOCK_WORDS)}<!-- /shared: core -->\n`;
+  };
+  assert.deepEqual(problems(t, within), []);
+});
 
 test("a plugin with neither hooks nor tsconfig.json passes when it ships a skill", (t) => {
   assert.deepEqual(problems(t, skillsOnly), []);
