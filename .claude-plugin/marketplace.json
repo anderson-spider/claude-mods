@@ -50,7 +50,7 @@
     {
       "name": "spider-team",
       "source": "./plugins/spider-team",
-      "description": "/spider-team: the session plans, delegates to four tiered agents (Fable, Opus, Sonnet, Haiku), reviews every result and ships it"
+      "description": "/spider-team: the session implements the task, calls a planner, researcher or reviewer when they help, and splits off parallel workers only when that pays"
     },
     {
       "name": "subagent-effort",

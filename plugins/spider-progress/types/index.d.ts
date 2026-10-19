@@ -6,8 +6,9 @@
 export type SpiderPhase = 'understand' | 'plan' | 'investigate' | 'execute' | 'review' | 'verify' | 'complete' | 'cancelled' | 'failed'
 /** A task's stored state; `blocked` is derived from its dependencies, never stored. */
 export type SpiderTaskState = 'pending' | 'running' | 'reviewing' | 'completed' | 'failed' | 'cancelled'
-export type SpiderTier = 'fable' | 'opus' | 'sonnet' | 'haiku'
-export type SpiderOwner = 'main' | 'explore' | SpiderTier
+/** A spider-team agent role (the identifier keeps its old name). */
+export type SpiderTier = 'planner' | 'worker' | 'researcher' | 'reviewer'
+export type SpiderOwner = 'main' | SpiderTier
 
 export type SpiderTask = {
   id: string
@@ -38,7 +39,7 @@ export type SpiderAgent = {
   model?: string
   /** The effort its last request ran at. */
   effort?: string
-  /** The tier's default effort, the one spider-team asks for. */
+  /** The role's default effort, the one spider-team asks for. */
   plannedEffort?: string
   status: 'running' | 'done' | 'failed' | 'cancelled'
   startedAt: number

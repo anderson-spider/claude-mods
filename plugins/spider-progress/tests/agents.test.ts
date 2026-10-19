@@ -4,12 +4,12 @@ import { agentEnded, agentStepped, answeredModel, agentsOfRun, capped, resumed, 
 import { STEP_BRIEF, TIERS, briefed, taskIdOf, tierOf } from '../hooks/tiers'
 
 const BRIEF = 'spider-task: T3\nRead the auth module.'
-const spawn = (list: SpiderAgent[] = [], agentId = 'a1', type = 'spider-team:spider-sonnet', prompt = BRIEF) => spawned(list, { agentId, type, model: 'claude-sonnet-5-5', prompt, now: 100 }, 200)
+const spawn = (list: SpiderAgent[] = [], agentId = 'a1', type = 'spider-team:spider-worker', prompt = BRIEF) => spawned(list, { agentId, type, model: 'claude-sonnet-5-5', prompt, now: 100 }, 200)
 const USAGE = { model: 'claude-sonnet-5-5', input_tokens: 1_000, output_tokens: 200, cache_read_input_tokens: 9_000, cache_creation_input_tokens: 500 }
 
 test('a spider spawn binds its task id and planned effort; any other agent is tracked with neither', () => {
   const [spider] = spawn()
-  expect(spider).toMatchObject({ agentId: 'a1', tier: 'sonnet', taskId: 'T3', plannedEffort: 'high', model: 'claude-sonnet-5-5', status: 'running', startedAt: 100, requests: 0 })
+  expect(spider).toMatchObject({ agentId: 'a1', tier: 'worker', taskId: 'T3', plannedEffort: 'medium', model: 'claude-sonnet-5-5', status: 'running', startedAt: 100, requests: 0 })
   const [other] = spawn([], 'a2', 'Explore', 'Find the router.')
   expect(other!.tier).toBeUndefined()
   expect(other!.taskId).toBeUndefined()
@@ -65,19 +65,19 @@ test('the history cap drops the oldest finished agents and keeps running ones', 
 })
 
 test('tierOf strips the plugin namespace and ignores other types', () => {
-  expect(tierOf('spider-team:spider-opus')).toBe('opus')
-  expect(tierOf('spider-haiku')).toBe('haiku')
-  expect(tierOf('other:spider-opus')).toBeUndefined()
+  expect(tierOf('spider-team:spider-planner')).toBe('planner')
+  expect(tierOf('spider-researcher')).toBe('researcher')
+  expect(tierOf('other:spider-planner')).toBeUndefined()
   expect(tierOf('general-purpose')).toBeUndefined()
   expect(tierOf(undefined)).toBeUndefined()
-  expect(TIERS.fable).toEqual({ model: 'fable', effort: 'high' })
+  expect(TIERS.planner).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
   expect(taskIdOf('intro\nspider-task: T12  \nmore')).toBe('T12')
   expect(taskIdOf('spider-task: X1')).toBeUndefined()
 })
 
 test('briefed appends the step brief once', () => {
-  expect(briefed('do it', 'spider-team:spider-opus')).toBe(`do it${STEP_BRIEF}`)
-  expect(briefed(`do it${STEP_BRIEF}`, 'spider-team:spider-opus')).toBe(`do it${STEP_BRIEF}`)
+  expect(briefed('do it', 'spider-team:spider-reviewer')).toBe(`do it${STEP_BRIEF}`)
+  expect(briefed(`do it${STEP_BRIEF}`, 'spider-team:spider-reviewer')).toBe(`do it${STEP_BRIEF}`)
   expect(briefed('do it', 'Explore')).toBe('do it')
 })
 
@@ -101,7 +101,7 @@ test('the run counts agents started while it was open and workers its tasks list
   const at = (agentId: string, now: number, list: SpiderAgent[]) => spawned(list, { agentId, type: 'Explore', prompt: 'Find it.', now }, 200)
   const list = at('late', 900, at('during', 500, at('resumed', 50, at('before', 10, []))))
   const run: SpiderRun = { runId: 'r', title: 'Auth', phase: 'complete', startedAt: 100, finishedAt: 800, tasks: [
-    { id: 'T1', title: 'Read', owner: 'sonnet', after: [], state: 'completed', attempts: 1, errors: [], agentIds: ['resumed'] },
+    { id: 'T1', title: 'Read', owner: 'worker', after: [], state: 'completed', attempts: 1, errors: [], agentIds: ['resumed'] },
   ] }
   expect(agentsOfRun(run, list).map(a => a.agentId)).toEqual(['resumed', 'during'])
   expect(agentsOfRun({ ...run, finishedAt: undefined, phase: 'execute' }, list).map(a => a.agentId)).toEqual(['resumed', 'during', 'late'])

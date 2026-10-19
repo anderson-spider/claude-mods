@@ -38,7 +38,7 @@ const TASKS_SCHEMA = {
     properties: {
       id: { type: 'string', description: 'T1, T2...' },
       title: { type: 'string' },
-      owner: { type: 'string', enum: ['main', 'explore', 'fable', 'opus', 'sonnet', 'haiku'] },
+      owner: { type: 'string', enum: ['main', 'planner', 'worker', 'researcher', 'reviewer'] },
       after: { type: 'array', items: { type: 'string' }, description: 'Ids that must be accepted first.' },
       criteria: { type: 'string', description: 'Acceptance criteria.' },
     },

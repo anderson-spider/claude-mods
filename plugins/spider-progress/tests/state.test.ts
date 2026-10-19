@@ -4,7 +4,7 @@ import { LIMITS, MAX_ATTEMPTS, applyProgress, bindWorker, effectiveState, progre
 
 let ids = 0
 const ctx = () => ({ now: 1_000, newRunId: () => `run-${++ids}` })
-const PLAN = { title: 'Auth', tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Build', owner: 'opus', after: ['T1'] }, { id: 'T3', title: 'Docs', owner: 'haiku' }] }
+const PLAN = { title: 'Auth', tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Build', owner: 'worker', after: ['T1'] }, { id: 'T3', title: 'Docs', owner: 'researcher' }] }
 const start = () => applyProgress(null, PLAN, ctx()).run as SpiderRun
 const set = (run: SpiderRun | null, id: string, state: string) => applyProgress(run, { task: { id, state } }, ctx())
 
@@ -59,18 +59,18 @@ test('a retry from reviewing counts the attempt and stops at three', () => {
 
 test("a replan keeps kept ids' state, cancels dropped ones and the percent ignores cancelled", () => {
   let run = set(start(), 'T1', 'completed').run!
-  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T4', title: 'New', owner: 'sonnet' }] }, ctx()).run!
+  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T4', title: 'New', owner: 'reviewer' }] }, ctx()).run!
   expect(run.tasks.map(t => [t.id, t.state])).toEqual([['T1', 'completed'], ['T4', 'pending'], ['T2', 'cancelled'], ['T3', 'cancelled']])
   expect(progressOf(run)).toEqual({ accepted: 1, total: 2, percent: 50 })
 })
 
 test('a replan cancels every dropped task, restarts a re-added cancelled one and keeps at most the task limit', () => {
   let run = set(start(), 'T2', 'failed').run!
-  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T3', title: 'Docs', owner: 'haiku' }] }, ctx()).run!
+  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T3', title: 'Docs', owner: 'researcher' }] }, ctx()).run!
   expect(run.tasks.find(t => t.id === 'T2')!.state).toBe('cancelled')
   run = set(set(run, 'T1', 'completed').run, 'T3', 'completed').run!
   expect(progressOf(run)).toEqual({ accepted: 2, total: 2, percent: 100 })
-  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Build again', owner: 'opus' }, { id: 'T3', title: 'Docs', owner: 'haiku' }] }, ctx()).run!
+  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Build again', owner: 'worker' }, { id: 'T3', title: 'Docs', owner: 'researcher' }] }, ctx()).run!
   expect(run.tasks.find(t => t.id === 'T2')).toMatchObject({ state: 'pending', attempts: 1, title: 'Build again' })
   expect(set(run, 'T2', 'running').text).toBe('ok: 2/3 tasks accepted · plan')
   const many = (from: number) => Array.from({ length: LIMITS.tasks }, (_, i) => ({ id: `T${from + i}`, title: 'x', owner: 'main' }))
@@ -106,7 +106,7 @@ test('the complete phase then finished closes once, and a task sent with the clo
 
 test('a different title on an open run starts a new run and leaves the old tasks behind', () => {
   const old = set(set(start(), 'T1', 'running').run, 'T1', 'completed').run!
-  const { run, text } = applyProgress(old, { title: 'Billing', phase: 'plan', tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Pay', owner: 'opus' }] }, { now: 9_000, newRunId: () => 'run-new' })
+  const { run, text } = applyProgress(old, { title: 'Billing', phase: 'plan', tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Pay', owner: 'worker' }] }, { now: 9_000, newRunId: () => 'run-new' })
   expect(run).toMatchObject({ runId: 'run-new', title: 'Billing', startedAt: 9_000 })
   expect(run!.tasks.map(t => [t.id, t.state, t.agentIds, t.evidence])).toEqual([['T1', 'pending', [], undefined], ['T2', 'pending', [], undefined]])
   expect(text).toBe('ok: 0/2 tasks accepted · plan')
@@ -166,7 +166,7 @@ test('junk input is bounded, unknown deps dropped and a cycle refused', () => {
   expect(run.tasks[0]!.title.length).toBe(LIMITS.title)
   expect(run.tasks[0]!.after).toEqual([])
   const bad = applyProgress(null, { title: 'Bad', tasks: [{ id: 3, title: 'n', owner: 'main' }, { id: 'T1', title: 'ok', owner: 'wizard' }] }, ctx())
-  expect(bad.text).toBe('refused: each task needs an id like T1, a title and an owner (main, explore, fable, opus, sonnet or haiku)')
+  expect(bad.text).toBe('refused: each task needs an id like T1, a title and an owner (main, planner, worker, researcher or reviewer)')
   const cycle = applyProgress(null, { title: 'Loop', tasks: [{ id: 'T1', title: 'a', owner: 'main', after: ['T2'] }, { id: 'T2', title: 'b', owner: 'main', after: ['T1'] }] }, ctx())
   expect(cycle).toEqual({ run: null, text: 'refused: the dependencies form a cycle (T1 → T2 → T1)' })
 })

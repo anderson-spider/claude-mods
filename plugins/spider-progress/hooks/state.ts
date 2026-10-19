@@ -8,7 +8,7 @@ export const LIMITS = { title: 120, tasks: 100, after: 20, text: 500, id: 20 } a
 export const MAX_ATTEMPTS = 3
 const MAX_ERRORS = 5
 
-const OWNERS: readonly SpiderOwner[] = ['main', 'explore', 'fable', 'opus', 'sonnet', 'haiku']
+const OWNERS: readonly SpiderOwner[] = ['main', 'planner', 'worker', 'researcher', 'reviewer']
 const STATES: readonly SpiderTaskState[] = ['pending', 'running', 'reviewing', 'completed', 'failed', 'cancelled']
 const WORKING: readonly SpiderPhase[] = ['understand', 'plan', 'investigate', 'execute', 'review', 'verify']
 const ENDING: readonly SpiderPhase[] = ['complete', 'cancelled', 'failed']
