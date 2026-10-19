@@ -33,6 +33,9 @@ export function world(on: On) {
   on('fs.write', (_$, e) => { if (fsFaults.write) throw new Error('write failed'); written.push(e.text); files.set(e.path, e.text); return { value: undefined } })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: p.io.root }))
+  // The surfaces the session draws on, first where it runs: a terminal unless a test sets another.
+  const surfaces: string[] = ['terminal']
+  on('session.surfaces', () => ({ value: surfaces }) as never)
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('settings.read', async (_$, e) => ({ value: e.source ? await p.io.settings(e.source as 'project' | 'local') : {} }) as never)
   on('http.fetch', async (_$, e) => ({ value: { ...await p.io.jev.fetch(e.url, e.init as never), ok: true, headers: {} } }))
@@ -42,7 +45,7 @@ export function world(on: On) {
   on('ui.toast', (_$, e) => { toasts.push(e.text); return { value: undefined } })
   /** The ledger's lines in the order written: `files` holds the current text, `ledger()` parses it. */
   const ledger = () => (files.get(LEDGER) ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, any>)
-  return { ...p, commands, env, files, fsFaults, written, ledger, toasts }
+  return { ...p, commands, env, files, fsFaults, written, ledger, toasts, surfaces }
 }
 export const LEDGER = '/home/u/.claude/subagent-effort/routes.jsonl'
 export async function started($: { session: { start: (e: never) => Promise<unknown> } }) {

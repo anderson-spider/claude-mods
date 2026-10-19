@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { afterAgentCall, afterTurn, appendLine, decisionLine, familyOf, formatSummary, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, usd } from '../hooks/ledger'
+import { afterAgentCall, afterTurn, runsInBackground, appendLine, decisionLine, familyOf, formatSummary, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, usd } from '../hooks/ledger'
 import type { FileIo, Line } from '../hooks/ledger'
 
 const ctx = { toolUseId: 'toolu_1', agentType: 'Explore', effort: 'medium' as const, background: false, model: null }
@@ -75,4 +75,15 @@ test('the summary groups outcomes by model family and effort, and counts decisio
 test('a dollar amount keeps two significant digits however small, and at least two decimals', () => {
   expect([usd(0.000042966), usd(0.0000126), usd(0.00000043), usd(0.126), usd(1.5), usd(12.345)]).toEqual(['$0.000043', '$0.000013', '$0.00000043', '$0.13', '$1.50', '$12.35'])
   expect([usd(0), usd(-1), usd(NaN), usd(Infinity)]).toEqual(['$0', '$0', '$0', '$0'])
+})
+
+test('a call runs in background when it asks to, or when the desktop app or VS Code runs the main conversation there', () => {
+  expect(runsInBackground({ flag: true, surfaces: ['terminal'], fromSubagent: false })).toBe(true)
+  expect(runsInBackground({ flag: 'true', surfaces: [], fromSubagent: true })).toBe(true)
+  expect(runsInBackground({ flag: undefined, surfaces: ['terminal'], fromSubagent: false })).toBe(false)
+  expect(runsInBackground({ flag: false, surfaces: ['desktop'], fromSubagent: false })).toBe(true)
+  expect(runsInBackground({ flag: undefined, surfaces: ['vscode'], fromSubagent: false })).toBe(true)
+  expect(runsInBackground({ flag: undefined, surfaces: ['desktop'], fromSubagent: true })).toBe(false)
+  // A terminal session the desktop app also attached to still runs in the terminal.
+  expect(runsInBackground({ flag: undefined, surfaces: ['terminal', 'desktop'], fromSubagent: false })).toBe(false)
 })

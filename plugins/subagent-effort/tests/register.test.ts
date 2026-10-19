@@ -114,6 +114,18 @@ test('an error of a call run in background, flagged true or "true", is written a
     .toEqual([['toolu_t', 'background', 'error'], ['toolu_s', 'background', 'error'], ['toolu_f', 'foreground', 'error']])
 })
 
+test("in the desktop app or VS Code, where the main conversation's agents always run in background, an error is a background outcome", async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  h.surfaces.splice(0, 1, 'desktop')
+  dispatched(on, { ref: 'r', text: 'the agent failed', result: 'the agent failed', isError: true }); await started($)
+  await settle($.tool.call(call({ tool_use_id: 'toolu_main' }) as never))
+  // A subagent's own Agent call runs in the foreground there unless it asks otherwise.
+  await settle($.tool.call(call({ tool_use_id: 'toolu_sub', agentId: 'agent-1' }) as never))
+  await settle($.tool.call(call({ tool_use_id: 'toolu_sub_bg', agentId: 'agent-1', run_in_background: true }) as never))
+  expect(h.ledger().filter(l => l.kind === 'outcome').map(l => [l.tool_use_id, l.mode]))
+    .toEqual([['toolu_main', 'background'], ['toolu_sub', 'foreground'], ['toolu_sub_bg', 'background']])
+})
+
 test('a background launch is written when its turn completes, once, and other turns write nothing', async ($, on) => {
   const h = world(on); h.env.JEV_API_KEY = 'test-key'
   const launched = { ref: 'r', text: MARKER, result: { status: 'async_launched', agentId: 'bg-1', prompt: MARKER } }
