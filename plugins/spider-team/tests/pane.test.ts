@@ -178,3 +178,9 @@ test('with a run but only outside agents the pane does not claim there are none'
   const before = { ...EXPLORE, agentId: 'a0', startedAt: -5_000 }
   expect(paneModel(view({ agents: [before] })).sections.map(s => s.key)).not.toContain('running')
 })
+
+test('tasks the run cancelled stay in the plan counts', () => {
+  const task = (id: string, state: SpiderTask['state']): SpiderTask => ({ id, title: id, owner: 'main', after: [], state, attempts: 1, errors: [], agentIds: [] })
+  const run: SpiderRun = { ...RUN, phase: 'cancelled', tasks: [task('T1', 'completed'), { ...task('T2', 'cancelled'), cancelledWithRun: true }, task('T3', 'cancelled')] }
+  expect(all([section('plan', { run, agents: [] })!.aside])).toBe('1 accepted / 0 running / 0 left / 1 cancelled')
+})

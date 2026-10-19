@@ -5,7 +5,6 @@ import type { SpiderConfig } from './config'
 export type Lang = 'en' | 'pt-BR'
 
 export type Strings = {
-  team: string
   agent: string
   agents: string
   counts: { accepted: string; acceptedOne: string; running: string; left: string; leftOne: string; failed: string; failedOne: string; cancelled: string; cancelledOne: string; recent: string; recentOne: string }
@@ -29,7 +28,6 @@ export const fill = (text: string, n: number | string): string => text.replace('
 
 export const STRINGS: Record<Lang, Strings> = {
   en: {
-    team: 'spider',
     agent: 'agent',
     agents: 'agents',
     counts: { accepted: 'accepted', acceptedOne: 'accepted', running: 'running', left: 'left', leftOne: 'left', failed: 'failed', failedOne: 'failed', cancelled: 'cancelled', cancelledOne: 'cancelled', recent: 'recent', recentOne: 'recent' },
@@ -45,7 +43,6 @@ export const STRINGS: Record<Lang, Strings> = {
     na: 'N/A',
   },
   'pt-BR': {
-    team: 'spider',
     agent: 'agente',
     agents: 'agentes',
     counts: { accepted: 'aceitas', acceptedOne: 'aceita', running: 'rodando', left: 'faltam', leftOne: 'falta', failed: 'falharam', failedOne: 'falhou', cancelled: 'canceladas', cancelledOne: 'cancelada', recent: 'recentes', recentOne: 'recente' },

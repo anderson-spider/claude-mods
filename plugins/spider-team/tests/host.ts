@@ -1,4 +1,4 @@
-// The host fake the plugin's tests share: tools, the command, panes, the clock, settings, spawns, steps and the band.
+// The host fake the plugin's tests share: tools, the command, panes, the clock, settings, spawns, steps and what draws above the prompt.
 import type { On, RenderElement } from 'claude-code'
 import { expect, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
@@ -11,7 +11,7 @@ export const NOW = Date.parse('2026-10-18T12:00:00Z')
 /** The MCP name the host gives a tool this plugin registers. */
 export const id = (name: string) => `mcp__spider-team__${name}`
 
-/** What draws beneath this plugin's band: another plugin's tree. */
+/** What another plugin draws above the prompt, which this plugin leaves alone. */
 export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['beneath'] }
 
 /**

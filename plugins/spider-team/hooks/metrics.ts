@@ -1,4 +1,4 @@
-// Token usage as the host reports it, its estimated cost and the figures the band and pane print.
+// Token usage as the host reports it, its estimated cost and the figures the pane prints.
 import type { SpiderAgent, SpiderMain, SpiderUsage } from '../types'
 import { STRINGS } from './i18n'
 import { priceOf } from './prices'
