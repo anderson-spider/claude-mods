@@ -11,6 +11,7 @@ else
   dirs=()
   for d in plugins/*/; do [ -f "${d}tsconfig.json" ] && dirs+=("$d"); done
 fi
+ensure_typings "${dirs[@]}"
 failed=()
 for d in "${dirs[@]}"; do
   echo "==> tsc ${d%/}"
