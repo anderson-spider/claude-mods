@@ -79,8 +79,8 @@ export const band = (columns = 60) => ({
   props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: columns, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }) as never
 
-export const pane = (columns = 100) => ({
-  plugin: 'spider-team', component: 'Pane', surface: 'terminal', requestId: 'spider-agents',
+export const pane = (columns = 100, surface: 'terminal' | 'desktop' = 'terminal') => ({
+  plugin: 'spider-team', component: 'Pane', surface, requestId: 'spider-agents',
   props: { title: 'Spider agents', isFocused: true, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 }) as never
 
