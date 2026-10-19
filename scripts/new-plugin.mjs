@@ -1,13 +1,12 @@
 // Creates a plugin that passes scripts/check-consistency.mjs, so the only edits left are the text to fill in.
 // Run: npm run plugin:new -- <name> [description]   (or: node scripts/new-plugin.mjs <name> [description])
 // `scaffoldPlugin(root, name, description)` is the pure core. It checks everything, then writes, so a refusal leaves no file.
-// What it writes: plugins/<name>/ from scripts/plugin-template/, the marketplace entry, .claude/rules/<name>.md, the
-// plugin's line in the root AGENTS.md "Where to look" list, the root README table row and install line, and the plugin
-// list of scripts/bootstrap.sh when the repository has one.
+// What it writes: plugins/<name>/ from scripts/plugin-template/, the marketplace entry, the plugin's line in the root
+// AGENTS.md "Where to look" list, the root README table row and install line, and the plugin list of scripts/bootstrap.sh
+// when the repository has one.
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ruleLine } from './check-consistency.mjs'
 
 const TEMPLATE_DIR = fileURLToPath(new URL('./plugin-template/', import.meta.url))
 // Lowercase words joined by single hyphens, starting with a letter. The name is also the middle of `mcp__<name>__<tool>`.
@@ -63,17 +62,14 @@ export function scaffoldPlugin(root, name, description) {
   if (!summary || /[\r\n]/.test(summary)) throw new Error('the description must be one non-empty line')
 
   const pluginDir = join(root, 'plugins', name)
-  const rulePath = join(root, '.claude/rules', `${name}.md`)
   const marketplacePath = join(root, '.claude-plugin/marketplace.json')
   const marketplace = JSON.parse(readText(marketplacePath))
   if (existsSync(pluginDir)) throw new Error(`plugins/${name} already exists`)
   if (marketplace.plugins.some(entry => entry.name === name)) throw new Error(`${name} is already in .claude-plugin/marketplace.json`)
-  if (existsSync(rulePath)) throw new Error(`.claude/rules/${name}.md already exists`)
 
   const values = { name, id: name.replaceAll('-', '_'), description: summary }
   const created = {
     [join('plugins', name, '.claude-plugin/plugin.json')]: `${JSON.stringify({ name, version: '0.1.0', description: summary, author: { name: 'anderson-spider' }, license: 'MIT' }, null, 2)}\n`,
-    [join('.claude/rules', `${name}.md`)]: `---\npaths:\n  - "plugins/${name}/**"\n---\n\n${ruleLine(name)}\n`,
   }
   for (const file of filesUnder(TEMPLATE_DIR)) {
     created[join('plugins', name, file.replace(/\.tmpl$/, ''))] = render(readText(join(TEMPLATE_DIR, file)), values, file)

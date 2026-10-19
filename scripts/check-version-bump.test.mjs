@@ -56,7 +56,7 @@ test("files outside plugins/<name>/ never count", () => {
       "AGENTS.md",
       "scripts/check-version-bump.mjs",
       ".github/workflows/ci.yml",
-      ".claude/rules/alpha.md",
+      "notes/alpha.md",
       ".claude-plugin/marketplace.json",
       "plugins/README.md",
       "plugins/alpha",

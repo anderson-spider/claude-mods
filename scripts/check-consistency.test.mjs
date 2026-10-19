@@ -5,16 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { checkRepo, citedTests, declaredTests, ruleLine } from "./check-consistency.mjs";
-
-const RULE_FRONT = '---\npaths:\n  - "plugins/alpha/**"\n---\n\n';
-const POINTER = ruleLine("alpha");
-const IMPORT = "@../../plugins/alpha/AGENTS.md";
+import { checkRepo, citedTests, declaredTests } from "./check-consistency.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const script = fileURLToPath(new URL("./check-consistency.mjs", import.meta.url));
 const json = (value) => JSON.stringify(value, null, 2);
-const COMMAND = (file) => `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${file}"`;
 const TEMPLATE = (file) => readFileSync(join(repoRoot, "scripts/plugin-template", file), "utf8");
 /** Gives alpha the shared SchemaFor files as exact copies of the template. */
 const withSchema = (files) => {
@@ -49,7 +44,6 @@ function baseFiles() {
     ].join("\n"),
     "plugins/alpha/tests/beta.test.ts": "test.skip('only in beta', () => {})\n",
     "plugins/alpha/skills/s/SKILL.md": "---\nname: s\ndescription: A skill.\n---\nBody\n",
-    ".claude/rules/alpha.md": `${RULE_FRONT}${POINTER}\n`,
     "AGENTS.md": "# AGENTS.md\n\n- Alpha things: `plugins/alpha/AGENTS.md`.\n",
     "README.md": [
       "| Plugin | What it does |",
@@ -61,16 +55,6 @@ function baseFiles() {
       "```",
       "",
     ].join("\n"),
-    ".claude/settings.json": json({
-      hooks: {
-        PreToolUse: [{ matcher: "Edit|Write", hooks: [{ type: "command", command: COMMAND("guard.mjs") }] }],
-        PostToolUse: [{ matcher: "Edit|Write", hooks: [{ type: "command", command: COMMAND("after.mjs"), timeout: 120 }] }],
-        SessionStart: [{ hooks: [{ type: "command", command: COMMAND("start.mjs") }] }],
-      },
-    }),
-    ".claude/hooks/guard.mjs": "// PreToolUse (Edit|Write): blocks something.\n",
-    ".claude/hooks/after.mjs": "// PostToolUse (Edit|Write): checks something.\n",
-    ".claude/hooks/start.mjs": "// SessionStart: prepares something.\n",
   };
 }
 
@@ -96,12 +80,6 @@ function problems(t, change = () => {}) {
 const edit = (path, change) => (files) => {
   files[path] = change(files[path]);
 };
-const settings = (change) =>
-  edit(".claude/settings.json", (text) => {
-    const parsed = JSON.parse(text);
-    change(parsed);
-    return json(parsed);
-  });
 const marketplace = (change) => edit(".claude-plugin/marketplace.json", (text) => json(change(JSON.parse(text))));
 
 test("the repository passes every check", () => {
@@ -158,47 +136,6 @@ for (const { name, change, expected } of [
     change: (files) => (files["plugins/alpha/CLAUDE.md"] = "@AGENTS.md\n"),
     expected: ["alpha: CLAUDE.md in the plugin root draws a validation warning; keep guidance in AGENTS.md"],
   },
-  { name: "rule file missing", change: edit(".claude/rules/alpha.md", () => undefined), expected: ["alpha: .claude/rules/alpha.md is missing"] },
-  {
-    name: "rule that points at another plugin",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${ruleLine("beta")}\n`),
-    expected: ["alpha: .claude/rules/alpha.md does not have the line \"Read `plugins/alpha/AGENTS.md` before changing files under `plugins/alpha/`.\""],
-  },
-  {
-    name: "rule that imports the AGENTS.md, which loads it at session start",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${IMPORT}\n`),
-    expected: ["alpha: .claude/rules/alpha.md does not have the line \"Read `plugins/alpha/AGENTS.md` before changing files under `plugins/alpha/`.\"", "alpha: .claude/rules/alpha.md has an @ import, which loads at session start; point at the file instead"],
-  },
-  {
-    name: "rule that imports the AGENTS.md beside the pointer",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${POINTER}\n${IMPORT}\n`),
-    expected: ["alpha: .claude/rules/alpha.md has an @ import, which loads at session start; point at the file instead"],
-  },
-  {
-    name: "rule whose pointer has a prefix",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}- ${POINTER}\n`),
-    expected: ["alpha: .claude/rules/alpha.md does not have the line \"Read `plugins/alpha/AGENTS.md` before changing files under `plugins/alpha/`.\""],
-  },
-  {
-    name: "rule copied from another plugin: its paths frontmatter lists that plugin",
-    change: edit(".claude/rules/alpha.md", (text) => text.replace("plugins/alpha/**", "plugins/other-plugin/**")),
-    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
-  },
-  {
-    name: "rule without paths frontmatter",
-    change: edit(".claude/rules/alpha.md", () => `${POINTER}\n`),
-    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
-  },
-  {
-    name: "rule whose paths glob stops at the plugin folder",
-    change: edit(".claude/rules/alpha.md", (text) => text.replace("plugins/alpha/**", "plugins/alpha")),
-    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
-  },
-  {
-    name: "rule whose plugin glob sits in the body, not the frontmatter",
-    change: edit(".claude/rules/alpha.md", () => `---\npaths:\n  - "other/**"\n---\n\n- "plugins/alpha/**"\n${POINTER}\n`),
-    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
-  },
   {
     name: "root AGENTS.md without the plugin",
     change: edit("AGENTS.md", () => "# AGENTS.md\n\n- Alpha things: plugins/alpha/AGENTS.md without backticks.\n"),
@@ -220,15 +157,6 @@ for (const { name, change, expected } of [
       files["plugins/ghost/.claude-plugin/plugin.json"] = "{}";
     },
     expected: ["plugins/ghost: no marketplace.json entry"],
-  },
-  {
-    name: "rule file without a plugin",
-    change: (files) => {
-      files[".claude/rules/ghost.md"] = "@../../plugins/ghost/AGENTS.md\n";
-    },
-    expected: [
-      '.claude/rules/ghost.md: no marketplace.json entry for plugin "ghost" (a rule that is not a plugin\'s goes in a subdirectory of .claude/rules/)',
-    ],
   },
   {
     name: "plugin directory that holds only the generated typings",
@@ -421,82 +349,6 @@ test("declared test names resolve string escapes and ignore calls that are not d
   );
 });
 
-// The hook wiring rule: a script runs only under the event and matcher its header declares, with its own command.
-for (const { name, change, expected } of [
-  {
-    name: "a hook moved to another event",
-    change: settings((s) => {
-      s.hooks.PostToolUse.push(...s.hooks.PreToolUse);
-      delete s.hooks.PreToolUse;
-    }),
-    expected: "guard.mjs: not wired under PreToolUse (Edit|Write)",
-  },
-  {
-    name: "a hook under the wrong matcher",
-    change: settings((s) => {
-      s.hooks.PreToolUse[0].matcher = "Bash";
-    }),
-    expected: "guard.mjs: not wired under PreToolUse (Edit|Write)",
-  },
-  {
-    name: "a hook without the matcher its header declares",
-    change: settings((s) => {
-      delete s.hooks.PreToolUse[0].matcher;
-    }),
-    expected: "guard.mjs: not wired under PreToolUse (Edit|Write)",
-  },
-  {
-    name: "a hook command replaced by echo",
-    change: settings((s) => {
-      s.hooks.PreToolUse[0].hooks[0].command = "echo " + COMMAND("guard.mjs");
-    }),
-    expected: "guard.mjs: not wired under PreToolUse (Edit|Write)",
-  },
-  {
-    name: "a hook command that runs another script",
-    change: settings((s) => {
-      s.hooks.PostToolUse[0].hooks[0].command = COMMAND("guard.mjs");
-    }),
-    expected: "after.mjs: not wired under PostToolUse (Edit|Write)",
-  },
-  {
-    name: "a hook entry that is not a command",
-    change: settings((s) => {
-      s.hooks.SessionStart[0].hooks[0].type = "prompt";
-    }),
-    expected: "start.mjs: not wired under SessionStart in",
-  },
-  {
-    name: "a hook script that is not referenced",
-    change: (files) => {
-      files[".claude/hooks/new.mjs"] = "// PreToolUse (Edit|Write): new.\n";
-    },
-    expected: "new.mjs: not wired under PreToolUse (Edit|Write)",
-  },
-  {
-    name: "a hook script without a header",
-    change: edit(".claude/hooks/guard.mjs", () => "import 'node:fs'\n"),
-    expected: "guard.mjs: first line must declare its event and matcher",
-  },
-  {
-    name: "disableAllHooks",
-    change: settings((s) => {
-      s.disableAllHooks = true;
-    }),
-    expected: "settings.json: disableAllHooks turns every project hook off",
-  },
-  {
-    name: "settings.json missing",
-    change: edit(".claude/settings.json", () => undefined),
-    expected: "guard.mjs: not wired under PreToolUse (Edit|Write)",
-  },
-]) {
-  test(`hook wiring fails: ${name}`, (t) => {
-    const found = problems(t, change);
-    assert.ok(found.some((line) => line.includes(expected)), `expected "${expected}" in:\n${found.join("\n") || "(no problems)"}`);
-  });
-}
-
 /** Turns alpha into a plugin that ships skills only: no hooks module and no typings. */
 const skillsOnly = (files) => {
   delete files["plugins/alpha/hooks/hooks.json"];
@@ -514,35 +366,6 @@ test("a plugin with neither hooks nor tsconfig.json and no skill is reported", (
       delete files["plugins/alpha/skills/s/SKILL.md"];
     }),
     ["alpha: has no hooks/hooks.json and no skill under skills/"],
-  );
-});
-
-test("hook wiring accepts the matcher alternatives in any order and a hook beside others", (t) => {
-  const found = problems(
-    t,
-    settings((s) => {
-      s.hooks.PreToolUse[0].matcher = "Write|Edit";
-      s.hooks.PreToolUse[0].hooks.unshift({ type: "command", command: "echo other" });
-    }),
-  );
-  assert.deepEqual(found, []);
-});
-
-test("hook tests next to the scripts are not hook scripts", (t) => {
-  assert.deepEqual(
-    problems(t, (files) => {
-      files[".claude/hooks/guard.test.mjs"] = "import 'node:test'\n";
-    }),
-    [],
-  );
-});
-
-test("a rule in a subdirectory of .claude/rules is not an orphan plugin rule", (t) => {
-  assert.deepEqual(
-    problems(t, (files) => {
-      files[".claude/rules/docs/style.md"] = "Write plainly.\n";
-    }),
-    [],
   );
 });
 
@@ -670,56 +493,6 @@ test("declared test names drop an escaped line break, LF or CRLF, and keep the t
   assert.deepEqual([...declaredTests("test('a \\q b', () => {})")], ["a q b"]);
 });
 
-// A hook with no matcher runs for every tool, which is what `*` says too; a header or a group may use either.
-for (const { name, change, expected } of [
-  {
-    name: "a hook without a matcher wired under the match-all matcher",
-    change: settings((s) => {
-      s.hooks.SessionStart[0].matcher = "*";
-    }),
-    expected: [],
-  },
-  {
-    name: "a header that declares the match-all matcher wired without one",
-    change: edit(".claude/hooks/start.mjs", () => "// SessionStart (*): prepares something.\n"),
-    expected: [],
-  },
-  {
-    name: "a matcher with empty alternatives",
-    change: settings((s) => {
-      s.hooks.PreToolUse[0].matcher = "Edit||Write|";
-    }),
-    expected: [],
-  },
-  {
-    name: "a specific matcher wired under the match-all matcher",
-    change: settings((s) => {
-      s.hooks.PreToolUse[0].matcher = "*";
-    }),
-    expected: ["guard.mjs: not wired under PreToolUse (Edit|Write)"],
-  },
-  {
-    name: "a hook without a matcher wired under a specific one",
-    change: settings((s) => {
-      s.hooks.SessionStart[0].matcher = "startup";
-    }),
-    expected: ["start.mjs: not wired under SessionStart in"],
-  },
-  {
-    name: "a matcher with an extra alternative",
-    change: settings((s) => {
-      s.hooks.PreToolUse[0].matcher = "Edit|Write|Bash";
-    }),
-    expected: ["guard.mjs: not wired under PreToolUse (Edit|Write)"],
-  },
-]) {
-  test(`hook matcher: ${name}`, (t) => {
-    const found = problems(t, change);
-    assert.equal(found.length, expected.length, found.join("\n") || "(no problems)");
-    expected.forEach((line, i) => assert.ok(found[i].includes(line), `expected "${line}" in "${found[i]}"`));
-  });
-}
-
 const PACKAGE = (pin) => JSON.stringify({ private: true, devDependencies: { "@anthropic-ai/claude-code": pin, typescript: "7.0.2" } });
 const WITH_PIN = (pin, readmeSuffix = "The repository is checked with v2.1.296 (`claude --version`).") => (files) => {
   if (pin !== undefined) files["package.json"] = PACKAGE(pin);
@@ -757,11 +530,6 @@ for (const { name, change, expected } of [
     expected: ['package.json: "@anthropic-ai/claude-code" is ^2.1.296; pin an exact version'],
   },
   {
-    name: "a rule whose plugin glob sits under another frontmatter key",
-    change: edit(".claude/rules/alpha.md", () => `---\nglobs:\n  - "plugins/alpha/**"\npaths:\n  - "other/**"\n---\n\n${POINTER}\n`),
-    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
-  },
-  {
     name: "a plugin directory whose .claude-plugin is a file",
     change: (files) => {
       files["plugins/ghost/.claude-plugin"] = "not a directory";
@@ -774,12 +542,6 @@ for (const { name, change, expected } of [
   });
 }
 
-
-test("a rule can list its plugin glob in the one-line forms or among others", (t) => {
-  for (const front of ['paths: "plugins/alpha/**"', 'paths: ["x/**", "plugins/alpha/**"]', 'paths:\n  - "x/**"\n  - plugins/alpha/**\nother: 1']) {
-    assert.deepEqual(problems(t, edit(".claude/rules/alpha.md", () => `---\n${front}\n---\n\n${POINTER}\n`)), [], front);
-  }
-});
 
 test("a .DS_Store beside the generated typings keeps the delete-the-directory hint", (t) => {
   assert.deepEqual(
@@ -831,9 +593,8 @@ for (const { name, change, expected } of [
     change: (files) => {
       unlistAlpha(files);
       delete files["plugins/alpha/AGENTS.md"];
-      delete files[".claude/rules/alpha.md"];
     },
-    expected: ["alpha: AGENTS.md is missing", "alpha: .claude/rules/alpha.md is missing"],
+    expected: ["alpha: AGENTS.md is missing"],
   },
   {
     name: "an unlisted plugin with a README row and install line",

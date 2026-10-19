@@ -12,4 +12,4 @@ Usage: [README.md](README.md).
   - A brief's first line is `spider-task: T<n>`; it binds the worker to its task.
   - Task ids are `T` plus up to three digits; owners are `main`, `explore`, `fable`, `opus`, `sonnet` or `haiku`.
   - Changing a tier, its model or its default effort means changing `TIERS` in `plugins/spider-progress/hooks/tiers.ts` too.
-- Without spider-progress the skill skips reporting; `/live-test` is the only proof of the skill's behaviour.
+- Without spider-progress the skill skips reporting; a real session that loads the plugin is the only proof of the skill's behaviour.
