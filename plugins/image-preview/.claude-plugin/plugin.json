@@ -1,6 +1,6 @@
 {
   "name": "image-preview",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "See images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads drawn under its row in the transcript",
   "author": {
     "name": "Jarrod Watts",
@@ -17,6 +17,5 @@
     "mod",
     "terminal",
     "claude-code"
-  ],
-  "types": "./types/index.d.ts"
+  ]
 }
