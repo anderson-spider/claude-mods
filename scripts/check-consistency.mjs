@@ -207,13 +207,22 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors, listed = true) 
     if (install) fail(`is unlisted, but the root README.md still has "/plugin install ${name}@${marketplace.name}"`)
   }
 
-  // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it.
-  for (const skill of listDir(join(dir, 'skills'), () => true)) {
+  // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it. Skills of one plugin
+  // may share a block between `<!-- shared: <block> -->` and `<!-- /shared: <block> -->`; every copy must match the first.
+  const shared = new Map()
+  for (const skill of listDir(join(dir, 'skills'), () => true).sort()) {
     const file = `${entry.source}/skills/${skill}/SKILL.md`
     const text = existsSync(join(root, file)) ? readText(join(root, file)) : ''
     // Further fields (`disable-model-invocation`) may follow the description.
     const front = /^---\nname: (.+)\ndescription: (.+)\n(?:[\w-]+: .+\n)*---\n/.exec(text)
     if (front?.[1] !== skill) fail(`${file} is missing or its frontmatter does not name "${skill}"`)
+    for (const [, block] of text.matchAll(/<!-- shared: ([\w-]+) -->/g)) {
+      const body = new RegExp(`<!-- shared: ${block} -->\\n([\\s\\S]*?)<!-- /shared: ${block} -->`).exec(text)
+      if (!body) { fail(`skills/${skill}/SKILL.md opens shared block "${block}" without <!-- /shared: ${block} -->`); continue }
+      const first = shared.get(block)
+      if (!first) shared.set(block, { skill, text: body[1] })
+      else if (first.text !== body[1]) fail(`skills/${skill}/SKILL.md shared block "${block}" differs from skills/${first.skill}/SKILL.md (copy it)`)
+    }
   }
 
   // One SchemaFor everywhere: a plugin's copy may not drift from the template the scaffold writes.
