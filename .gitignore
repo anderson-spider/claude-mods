@@ -8,7 +8,7 @@ plugins/codex-computer-use/helper/run/
 # Saved `claude plugin validate --strict` output (npm run plugins:scan)
 .scan*/
 
-# Local review and test reports (/ship, /live-test)
+# Local review and test reports
 .reports/
 
 # Local state of the superpowers skills (brainstorm server, sdd)
@@ -17,8 +17,6 @@ plugins/codex-computer-use/helper/run/
 # Development tools installed by npm ci
 node_modules/
 
-# The project's Claude Code config (hooks, rules, skills, settings.json) is tracked even when a global ignore hides
-# .claude/; its local state stays out.
-!.claude/
+# Local Claude Code state a session may create in the checkout
 .claude/worktrees/
 .claude/settings.local.json

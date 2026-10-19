@@ -27,13 +27,12 @@ function fixture(t) {
     "plugins/mid/tsconfig.json": json({ extends: "./.claude-plugin/types/tsconfig.json", compilerOptions: { noEmit: true } }),
     "plugins/mid/README.md": "# mid\n",
     "plugins/mid/AGENTS.md": "# mid\n",
-    ".claude/rules/mid.md": '---\npaths:\n  - "plugins/mid/**"\n---\n\nRead `plugins/mid/AGENTS.md` before changing files under `plugins/mid/`.\n',
     "AGENTS.md": [
       "## Where to look",
       "",
-      "- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` points at it.",
+      "- Plugin work: read `plugins/<name>/AGENTS.md` first.",
       "- Mid things: `plugins/mid/AGENTS.md`.",
-      "- Release checks: `/release-plugin <plugin>`.",
+      "- Release checks: `npm run check -- <plugin>`.",
       "",
     ].join("\n"),
     "README.md": [
@@ -67,7 +66,6 @@ test("a scaffolded plugin passes every consistency check, before, between and af
     const { created, edited } = scaffoldPlugin(root, name, `The ${name} plugin.`);
     assert.deepEqual(edited, [".claude-plugin/marketplace.json", "AGENTS.md", "README.md"]);
     assert.ok(created.includes(`plugins/${name}/.claude-plugin/plugin.json`));
-    assert.ok(created.includes(`.claude/rules/${name}.md`));
     assert.deepEqual(checkRepo(root).errors, []);
   }
   assert.equal(checkRepo(root).count, 4);
@@ -87,11 +85,11 @@ test("the entries land in sorted places with the format of the existing ones", (
     [
       "## Where to look",
       "",
-      "- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` points at it.",
+      "- Plugin work: read `plugins/<name>/AGENTS.md` first.",
       "- aardvark: `plugins/aardvark/AGENTS.md`.",
       "- Mid things: `plugins/mid/AGENTS.md`.",
       "- zeta: `plugins/zeta/AGENTS.md`.",
-      "- Release checks: `/release-plugin <plugin>`.",
+      "- Release checks: `npm run check -- <plugin>`.",
       "",
     ].join("\n"),
   );
@@ -111,10 +109,6 @@ test("the entries land in sorted places with the format of the existing ones", (
       "```",
       "",
     ].join("\n"),
-  );
-  assert.equal(
-    readFileSync(join(root, ".claude/rules/zeta.md"), "utf8"),
-    '---\npaths:\n  - "plugins/zeta/**"\n---\n\nRead `plugins/zeta/AGENTS.md` before changing files under `plugins/zeta/`.\n',
   );
 });
 
@@ -187,7 +181,7 @@ test("a valid name has no objection", () => {
   for (const name of ["a", "abc", "a1", "my-new-tool", "a".repeat(26)]) assert.equal(invalidName(name), undefined);
 });
 
-test("refuses an existing plugin directory, marketplace entry or rule, and writes nothing", (t) => {
+test("refuses an existing plugin directory or marketplace entry, and writes nothing", (t) => {
   const root = fixture(t);
   const before = listing(root);
   assert.throws(() => scaffoldPlugin(root, "mid"), /plugins\/mid already exists/);
@@ -195,11 +189,6 @@ test("refuses an existing plugin directory, marketplace entry or rule, and write
   rmSync(join(root, "plugins/mid"), { recursive: true });
   const without = listing(root);
   assert.throws(() => scaffoldPlugin(root, "mid"), /mid is already in \.claude-plugin\/marketplace\.json/);
-
-  const market = JSON.parse(readFileSync(join(root, ".claude-plugin/marketplace.json"), "utf8"));
-  market.plugins = [];
-  writeFileSync(join(root, ".claude-plugin/marketplace.json"), json(market));
-  assert.throws(() => scaffoldPlugin(root, "mid"), /\.claude\/rules\/mid\.md already exists/);
 
   assert.ok(before.length > without.length);
   assert.ok(!existsSync(join(root, "plugins/mid")));

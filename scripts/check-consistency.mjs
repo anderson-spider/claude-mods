@@ -7,9 +7,6 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const TYPES_TSCONFIG = './.claude-plugin/types/tsconfig.json'
-const HOOK_COMMAND = file => `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${file}"`
-// A project hook script declares its event and matcher on its first line: `// PreToolUse (Edit|Write): why`.
-const HOOK_HEADER = /^\/\/ (\w+)(?: \(([^)]*)\))?:/
 // The SchemaFor files: each plugin path with the template file it copies byte for byte (neither has a placeholder). A
 // plugin with hooks/schema.ts carries both.
 const TEMPLATE_DIR = fileURLToPath(new URL('./plugin-template/', import.meta.url))
@@ -18,33 +15,11 @@ const SHARED_FILES = [
   ['tests/schema-types.ts', 'tests/schema-types.ts.tmpl'],
 ]
 
-// A plugin rule points at the plugin's AGENTS.md instead of importing it: Claude Code resolves an `@` import in a
-// `paths` rule when the session starts, so an import would load every plugin's AGENTS.md before any file is touched.
-export const ruleLine = name => `Read \`plugins/${name}/AGENTS.md\` before changing files under \`plugins/${name}/\`.`
-
 const readText = path => readFileSync(path, 'utf8')
 const readJson = path => JSON.parse(readText(path))
 const CLI_PACKAGE = '@anthropic-ai/claude-code'
 const listDir = (path, keep) => (existsSync(path) ? readdirSync(path, { withFileTypes: true }).filter(keep).map(entry => entry.name) : [])
 const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-// A rule's `paths` frontmatter lists the globs that load it: a `paths:` key with `  - "plugins/<name>/**"` items, or a
-// one-line value. Items under other keys do not count.
-const rulePaths = text => {
-  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? ''
-  const globs = []
-  let inPaths = false
-  for (const line of front.split(/\r?\n/)) {
-    const key = /^(\w[\w-]*):\s*(.*)$/.exec(line)
-    if (key) {
-      inPaths = key[1] === 'paths'
-      if (inPaths) globs.push(...key[2].replace(/^\[|\]$/g, '').split(',').map(item => item.trim().replace(/^["']|["']$/g, '')))
-    } else if (inPaths) {
-      const item = /^\s*-\s*["']?([^"'\r\n]*?)["']?\s*$/.exec(line)
-      if (item) globs.push(item[1])
-    }
-  }
-  return globs.filter(Boolean)
-}
 // True when the folder holds nothing but `.claude-plugin/types/`, the typings a loaded plugin gets.
 const onlyGeneratedTypes = dir => {
   try {
@@ -55,8 +30,6 @@ const onlyGeneratedTypes = dir => {
     return false // `.claude-plugin` is a file, or the folder cannot be read: the plain message stands
   }
 }
-const sameSet = (a, b) => a.length === b.length && a.every(item => b.includes(item))
-const alternatives = matcher => (matcher ?? '').split('|').filter(item => item && item !== '*').sort()
 
 function unescape(literal) {
   const simple = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' }
@@ -160,28 +133,6 @@ function checkChatgptDefault(root, errors) {
   }
 }
 
-// Each project hook script is wired under the event and matcher its header declares, with its exact command.
-function checkHooks(root, errors) {
-  const settingsPath = join(root, '.claude/settings.json')
-  const settings = existsSync(settingsPath) ? readJson(settingsPath) : {}
-  if (settings.disableAllHooks) errors.push('.claude/settings.json: disableAllHooks turns every project hook off')
-
-  for (const file of listDir(join(root, '.claude/hooks'), e => e.isFile() && e.name.endsWith('.mjs') && !e.name.endsWith('.test.mjs'))) {
-    const header = HOOK_HEADER.exec(readText(join(root, '.claude/hooks', file)).split('\n', 1)[0])
-    if (!header) {
-      errors.push(`.claude/hooks/${file}: first line must declare its event and matcher, like "// PreToolUse (Edit|Write): why"`)
-      continue
-    }
-    const [, event, matcher] = header
-    const wired = (settings.hooks?.[event] ?? []).some(
-      group =>
-        sameSet(alternatives(group.matcher), alternatives(matcher)) &&
-        (group.hooks ?? []).some(hook => hook.type === 'command' && hook.command === HOOK_COMMAND(file))
-    )
-    if (!wired) errors.push(`.claude/hooks/${file}: not wired under ${event}${matcher ? ` (${matcher})` : ''} in .claude/settings.json as ${HOOK_COMMAND(file)}`)
-  }
-}
-
 // AGENTS.md pins behavior by test name; a renamed or removed test must fail here, not drift.
 function checkCitedTests(dir, fail) {
   const agents = join(dir, 'AGENTS.md')
@@ -244,16 +195,6 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors, listed = true) 
 
   for (const doc of ['AGENTS.md', 'README.md']) if (!existsSync(join(dir, doc))) fail(`${doc} is missing`)
   if (existsSync(join(dir, 'CLAUDE.md'))) fail('CLAUDE.md in the plugin root draws a validation warning; keep guidance in AGENTS.md')
-
-  const rule = join(root, `.claude/rules/${name}.md`)
-  if (!existsSync(rule)) fail(`.claude/rules/${name}.md is missing`)
-  else {
-    const text = readText(rule)
-    const lines = text.split(/\r?\n/)
-    if (!lines.includes(ruleLine(name))) fail(`.claude/rules/${name}.md does not have the line "${ruleLine(name)}"`)
-    if (lines.some(line => line.startsWith('@'))) fail(`.claude/rules/${name}.md has an @ import, which loads at session start; point at the file instead`)
-    if (!rulePaths(text).includes(`plugins/${name}/**`)) fail(`.claude/rules/${name}.md paths frontmatter does not list "plugins/${name}/**"`)
-  }
 
   if (!rootDocs.agents.includes(`\`plugins/${name}/AGENTS.md\``)) fail(`root AGENTS.md does not cite \`plugins/${name}/AGENTS.md\``)
   const row = new RegExp(`^\\| \\[${escapeRegex(name)}\\]\\(plugins/${escapeRegex(name)}(?:/README\\.md)?\\) \\|`, 'm')
@@ -323,21 +264,16 @@ export function checkRepo(root = '.') {
     else checkPlugin(root, { name, source: `./plugins/${name}` }, marketplace, rootDocs, errors, false)
   }
 
-  // The reverse direction: every plugin directory the tasks would validate must be listed, and a rule needs its plugin.
+  // The reverse direction: every plugin directory the tasks would validate must be listed.
   for (const dir of listDir(join(root, 'plugins'), e => e.isDirectory())) {
     if (known.has(dir)) continue
     // Claude Code writes the git-ignored typings into a plugin that is loaded, and they outlive its removal.
     const leftover = onlyGeneratedTypes(join(root, 'plugins', dir))
     errors.push(`plugins/${dir}: no marketplace.json entry${leftover ? ' (only the generated .claude-plugin/types/ is left; delete the directory)' : ''}`)
   }
-  for (const file of listDir(join(root, '.claude/rules'), e => e.isFile() && e.name.endsWith('.md'))) {
-    const rule = file.slice(0, -3)
-    if (!known.has(rule)) errors.push(`.claude/rules/${file}: no marketplace.json entry for plugin "${rule}" (a rule that is not a plugin's goes in a subdirectory of .claude/rules/)`)
-  }
 
   checkCliPin(root, errors)
   checkBootstrap(root, listed, errors)
-  checkHooks(root, errors)
   checkChatgptDefault(root, errors)
   return { errors, count: marketplace.plugins.length, unlisted: unlisted.length }
 }

@@ -66,7 +66,7 @@ Rerunning the one-step command does both for every plugin. From the main checkou
 
 ## Contributing
 
-Rules for changing the code, the done definition and the project skills are in [AGENTS.md](AGENTS.md). Setup: Node 24 (`.nvmrc`), then `npm ci`, which installs the pinned Claude Code CLI and TypeScript; `npm run` puts them first on PATH.
+Rules for changing the code and the done definition are in [AGENTS.md](AGENTS.md). Setup: Node 24 (`.nvmrc`), then `npm ci`, which installs the pinned Claude Code CLI and TypeScript; `npm run` puts them first on PATH.
 
 Pull requests from forks run CI without secrets and are merged only after a maintainer reads the whole diff: the code runs on every installed copy. Use placeholders, never real hosts, project names, paths or tokens, in code, tests and examples. Report vulnerabilities privately as [SECURITY.md](SECURITY.md) describes.
 
@@ -91,7 +91,7 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 
 `/reload-plugins` and `claude plugin details` report `0 hooks` for every plugin here, because they count only `hooks.json` command hooks and these plugins ship hooks modules. `claude plugin validate plugins/<name>` lists a module's events and `$` calls; a module that fails to load leaves a line in `claude --debug`.
 
-Unit tests run against host fakes: a Claude Code update can break a plugin without a test failing here. Use `/live-test <plugin>` for real-session checks.
+Unit tests run against host fakes: a Claude Code update can break a plugin without a test failing here. Check real behavior in a session that loads the plugin from its folder (`claude --plugin-dir plugins/<name>`).
 
 ## Acknowledgments
 
