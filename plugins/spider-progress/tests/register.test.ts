@@ -3,9 +3,9 @@ import type { Engine } from 'claude-code/testing'
 import { STEP_BRIEF } from '../hooks/tiers'
 import { NOW, band, call, drawn, flush, pane, started, step, world } from './host'
 
-const PLAN = { title: 'Auth', phase: 'execute', tasks: [{ id: 'T1', title: 'Build login', owner: 'opus' }] }
+const PLAN = { title: 'Auth', phase: 'execute', tasks: [{ id: 'T1', title: 'Build login', owner: 'worker' }] }
 const run = ($: Engine, args = '') => $.command.run({ command: 'spider-agents', args } as never) as Promise<{ text?: string }>
-const spawn = ($: Engine, prompt: string, subagentType = 'spider-team:spider-opus') => $.agent.spawn({ prompt, subagentType, description: 'Build login' } as never) as Promise<{ agentId?: string }>
+const spawn = ($: Engine, prompt: string, subagentType = 'spider-team:spider-worker') => $.agent.spawn({ prompt, subagentType, description: 'Build login' } as never) as Promise<{ agentId?: string }>
 const end = ($: Engine, agentId: string, reason = 'answer') => $.turn.complete({ turnId: 't1', agentId, answer: 'ok', durationMs: 1, isAborted: false, reason } as never)
 
 test('session start registers progress, step and the spider-agents command', async ($, on) => {
@@ -39,12 +39,12 @@ test('a spawned spider worker gets the step brief and binds its task, which move
   await step($, agentId!)
   expect(await call($, 'step', { done: 1, total: 3 }, agentId)).toBe('ok: 1/3')
   let ui = await $.ui.mount(pane())
-  expect(await drawn(ui)).toMatch(/T1 Build login · opus · running \(1\/3\)/)
+  expect(await drawn(ui)).toMatch(/T1 Build login · worker · running \(1\/3\)/)
   await ui.unmount()
   await end($, agentId!)
   await flush()
   ui = await $.ui.mount(pane())
-  expect(await drawn(ui)).toMatch(/T1 Build login · opus · reviewing/)
+  expect(await drawn(ui)).toMatch(/T1 Build login · worker · reviewing/)
   expect(await call($, 'step', { done: 2, total: 3 }, agentId)).toBe(`ignored: ${agentId} already ended`)
   await ui.unmount()
 })
@@ -193,14 +193,14 @@ test('a resumed worker keeps its prompt, runs again and sends its task back to r
   await end($, agentId!)
   await flush()
   expect(await call($, 'progress', { task: { id: 'T1', state: 'running' } })).toBe('ok: 0/1 tasks accepted · execute')
-  await $.agent.spawn({ prompt: 'Fix the review notes.', subagentType: 'spider-team:spider-opus', description: 'T1 Build login', resume: { agentId } } as never)
+  await $.agent.spawn({ prompt: 'Fix the review notes.', subagentType: 'spider-team:spider-worker', description: 'T1 Build login', resume: { agentId } } as never)
   await flush()
   expect(prompts[1]).toBe('Fix the review notes.')
   expect(await call($, 'step', { done: 1, total: 2 }, agentId)).toBe('ok: 1/2')
   await end($, agentId!)
   await flush()
   const ui = await $.ui.mount(pane())
-  expect(await drawn(ui)).toMatch(/T1 Build login · opus · reviewing/)
+  expect(await drawn(ui)).toMatch(/T1 Build login · worker · reviewing/)
   await ui.unmount()
 })
 
@@ -214,9 +214,9 @@ test('an ending heard before its spawn is recorded leaves no running row', async
   await flush()
   const ui = await $.ui.mount(pane())
   const text = await drawn(ui)
-  expect(text).toMatch(/spider-opus.*failed/)
-  expect(text).not.toMatch(/spider-opus.*running/)
-  expect(text).toMatch(/T1 Build login · opus · running · the worker ended: error/)
+  expect(text).toMatch(/spider-worker.*failed/)
+  expect(text).not.toMatch(/spider-worker.*running/)
+  expect(text).toMatch(/T1 Build login · worker · running · the worker ended: error/)
   await ui.unmount()
 })
 
@@ -387,7 +387,7 @@ test('a failed observation logs its error and leaves the answer as the host gave
 test('a spawn hook that throws logs why and still lets the spawn through', async ($, on) => {
   const { tools, logs } = world(on)
   await started($, tools)
-  const result = await $.agent.spawn({ prompt: 42, subagentType: 'spider-team:spider-opus', description: 'Bad' } as never) as { agentId?: string }
+  const result = await $.agent.spawn({ prompt: 42, subagentType: 'spider-team:spider-worker', description: 'Bad' } as never) as { agentId?: string }
   expect(result.agentId).toBe('agent-1')
   expect(logs.some(line => line.startsWith('spider-progress: spawn hook failed:'))).toBe(true)
 })

@@ -1,12 +1,50 @@
 {
   "name": "spider-team",
-  "version": "0.15.0",
-  "description": "/spider-team: the session plans, delegates to four tiered agents (Fable, Opus, Sonnet, Haiku), reviews every result and ships it",
+  "version": "0.16.0",
+  "description": "/spider-team: the session implements the task, calls a planner, researcher or reviewer when they help, and splits off parallel workers only when that pays",
   "author": {
     "name": "anderson-spider"
   },
   "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/spider-team",
   "repository": "https://github.com/anderson-spider/claude-mods",
   "license": "MIT",
-  "keywords": ["skill", "orchestration", "subagents", "agents", "claude-code"]
+  "keywords": ["skill", "orchestration", "subagents", "agents", "claude-code"],
+  "userConfig": {
+    "max_workers": {
+      "type": "number",
+      "title": "Parallel workers",
+      "description": "The most spider-worker agents /spider-team runs at once.",
+      "default": 2,
+      "min": 1,
+      "max": 8
+    },
+    "planner_effort": {
+      "type": "string",
+      "title": "Planner effort",
+      "description": "The effort /spider-team asks for when it calls the planner (Opus 5.5). subagent-effort, when active, replaces it.",
+      "default": "medium",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "worker_effort": {
+      "type": "string",
+      "title": "Worker effort",
+      "description": "The effort /spider-team asks for when it calls the worker (Sonnet 5.5). subagent-effort, when active, replaces it.",
+      "default": "medium",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "researcher_effort": {
+      "type": "string",
+      "title": "Researcher effort",
+      "description": "The effort /spider-team asks for when it calls the researcher (Haiku 5.5). subagent-effort, when active, replaces it.",
+      "default": "medium",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "reviewer_effort": {
+      "type": "string",
+      "title": "Reviewer effort",
+      "description": "The effort /spider-team asks for when it calls the reviewer (Opus 5.5). subagent-effort, when active, replaces it.",
+      "default": "medium",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    }
+  }
 }

@@ -13,7 +13,7 @@ Claude Code **function hooks mods** marketplace. User-facing setup is in [README
 - Thumbnails of pasted images above the prompt: `plugins/image-preview/AGENTS.md`.
 - Session card above the prompt: `plugins/session-hud/AGENTS.md`.
 - Progress band and agents pane for spider-team runs and any subagent: `plugins/spider-progress/AGENTS.md`.
-- Tiered orchestration skill (`/spider-team`) and its agents: `plugins/spider-team/AGENTS.md`.
+- Orchestration skill (`/spider-team`) and its role agents: `plugins/spider-team/AGENTS.md`.
 - Jev-routed reasoning effort for native subagent calls: `plugins/subagent-effort/AGENTS.md`.
 - Tailscale API tools: `plugins/tailscale/AGENTS.md`.
 - Hooks authoring or debugging: load the `plugin-authoring` skill first. The `claude-code` module is host-provided, not on npm.

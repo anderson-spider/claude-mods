@@ -12,7 +12,7 @@ import type { Piece, Style } from './text'
 
 export type PaneView = { run: SpiderRun | null; agents: SpiderAgent[]; main: SpiderMain; config: SpiderConfig; compact: boolean; columns: number; lang: Lang; now: number; frame: number }
 
-const ICONS: Record<string, string> = { fable: '✦', opus: '◆', sonnet: '◇', haiku: '△', Explore: '⌕' }
+const ICONS: Record<string, string> = { planner: '◈', worker: '◇', researcher: '○', reviewer: '◆', Explore: '⌕' }
 const STATUS_STYLE: Record<SpiderAgent['status'], Style> = { running: 'accent', done: 'ok', failed: 'error', cancelled: 'dim' }
 const TASK_STYLE: Partial<Record<SpiderTask['state'] | 'blocked', Style>> = { completed: 'ok', blocked: 'warn', failed: 'error' }
 
