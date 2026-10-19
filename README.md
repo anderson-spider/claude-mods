@@ -83,8 +83,8 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 | `npm run typecheck [-- <name>]` | Run the pinned `tsc` on one plugin, or every plugin with TypeScript; the typings must exist (`plugins:types`). |
 | `npm run plugins:test [-- <name>]` | Script tests, every plugin's tests and, with the ChatGPT app installed, the codex-computer-use helper tests; with a name, only that plugin's tests. |
 | `npm run plugins:scan` | Save each plugin's `validate --strict` output under `.scan/` to diff before and after a refactor. |
-| `npm run plugins:update` | Refresh the marketplace and update every installed plugin in its own scope. |
-| `npm run update:all` | Pull `main`, run `npm ci` and `plugins:update` (main checkout only). |
+| `npm run plugins:sync` | Refresh the marketplace, then update every installed plugin it lists and uninstall those it no longer lists, each in its own scope. |
+| `npm run update:all` | Pull `main`, run `npm ci` and `plugins:sync` (main checkout only). |
 | `npm run install:test` | Install the marketplace from the checkout on a clean Linux image (Docker) as a new user would, and check that every plugin loads. |
 
 `/reload-plugins` and `claude plugin details` report `0 hooks` for every plugin here, because they count only `hooks.json` command hooks and these plugins ship hooks modules. `claude plugin validate plugins/<name>` lists a module's events and `$` calls; a module that fails to load leaves a line in `claude --debug`.

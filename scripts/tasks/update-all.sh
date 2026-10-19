@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# npm run update:all — from the main checkout: pull main and update every installed plugin.
+# npm run update:all — from the main checkout: pull main and sync the installed plugins with the marketplace.
 set -euo pipefail
 . scripts/tasks/lib.sh
 use_own_claude
@@ -17,7 +17,7 @@ git pull --ff-only
 echo "==> tools"
 npm ci
 echo "==> plugins"
-node scripts/update-plugins.mjs
+node scripts/sync-plugins.mjs
 claude plugin list --json | node -e '
   const rows = JSON.parse(require("fs").readFileSync(0, "utf8")).filter(p => p.id.endsWith("@spider-claude-mods"))
   for (const p of rows) console.error(`${p.id} ${p.version} (${p.scope}${p.enabled ? "" : ", disabled"})`)
