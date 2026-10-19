@@ -1,14 +1,18 @@
 // What the pane draws: runs of text with a style the renderer maps to theme colours, and the helpers that
 // fit them to a width. Pure.
 
-export type Style = 'plain' | 'title' | 'dim' | 'ok' | 'warn' | 'error' | 'bar' | 'barEmpty'
-export type Piece = { text: string; style: Style }
+export type Style = 'plain' | 'title' | 'dim' | 'ok' | 'warn' | 'error' | 'bar' | 'barEmpty' | 'badge'
+/** A theme colour a piece may take in place of its style's: a role's or a card's. */
+export type Tone = 'claude' | 'suggestion' | 'success' | 'warning' | 'error' | 'merged' | 'planMode' | 'inactive' | 'subtle'
+export type Piece = { text: string; style: Style; tone?: Tone }
 
 const LIT_RUN = 4 // cells lit in the moving stretch of an indeterminate bar
 
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
 
 export const p = (text: string, style: Style = 'plain'): Piece => ({ text, style })
+/** A piece in a theme colour, bold when `strong`. */
+export const toned = (text: string, tone: Tone, strong = false): Piece => ({ text, style: strong ? 'title' : 'plain', tone })
 
 /** Width in terminal cells, counting code points (titles and labels here are narrow characters). */
 export const cells = (text: string): number => [...text].length
