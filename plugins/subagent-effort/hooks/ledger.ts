@@ -54,7 +54,20 @@ export function decisionLine({ ts, toolUseId, agentType, briefChars, source, rec
   }
 }
 
-/** What an outcome line needs from its decision; `background` and `model` are what the call asked for (null: no model named). */
+/** Where the session runs when its first surface is one of these apps, which run the main conversation's agents in background. */
+const BACKGROUND_APPS: readonly string[] = ['desktop', 'vscode']
+
+/**
+ * Whether an `Agent` call runs in background: it asks to (`run_in_background`, true or "true"), or it comes from the main
+ * conversation of a session the desktop app or VS Code runs, where the host always does so. A subagent's own call there
+ * runs in the foreground unless it asks.
+ */
+export function runsInBackground(call: { flag: unknown; surfaces: readonly string[]; fromSubagent: boolean }): boolean {
+  if (call.flag === true || call.flag === 'true') return true
+  return !call.fromSubagent && BACKGROUND_APPS.includes(call.surfaces[0] ?? '')
+}
+
+/** What an outcome line needs from its decision; `background` is how the call runs (runsInBackground), `model` what it asked for (null: no model named). */
 export type Context = { toolUseId: string | undefined; agentType: string; effort: Effort | null; background: boolean; model: string | null }
 
 function outcome(ctx: Context, ts: string, mode: OutcomeLine['mode'], fields: { resolvedModel: unknown; status: Status; durationMs: unknown; usage: unknown }): OutcomeLine {
