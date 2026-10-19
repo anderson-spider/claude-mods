@@ -129,3 +129,20 @@ export function capped(list: SpiderAgent[], limit: number): SpiderAgent[] {
   const dropped = new Set(list.filter(a => a.status !== 'running').slice(0, extra))
   return list.filter(a => !dropped.has(a))
 }
+
+/** What the host says of an agent: its id and where its loop stands. */
+export type HostAgent = { id: string; status: string }
+
+/**
+ * The running agents whose ending was missed (a reload while they ran), each with the reason to end it by: the host's
+ * last word for one it still lists as done, failed or killed, `aborted` for one it no longer lists.
+ */
+export function missedEndings(list: SpiderAgent[], host: HostAgent[]): { agentId: string; reason: string }[] {
+  const byId = new Map(host.map(agent => [agent.id, agent.status]))
+  const REASON: Record<string, string> = { completed: 'answer', failed: 'error', killed: 'aborted' }
+  return list.filter(a => a.status === 'running').flatMap(a => {
+    const status = byId.get(a.agentId)
+    if (status === undefined) return [{ agentId: a.agentId, reason: 'aborted' }]
+    return REASON[status] ? [{ agentId: a.agentId, reason: REASON[status]! }] : []
+  })
+}

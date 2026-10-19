@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent, SpiderRun } from '../types'
-import { TOOLS_KEPT, agentEnded, agentStepped, answeredModel, agentsOfRun, capped, resumed, spawned, stepReported, toolName, toolUsed } from '../hooks/agents'
+import { TOOLS_KEPT, agentEnded, agentStepped, agentsOfRun, answeredModel, capped, missedEndings, resumed, spawned, stepReported, toolName, toolUsed } from '../hooks/agents'
 import { STEP_BRIEF, TIERS, briefed, taskIdOf, tierOf } from '../hooks/tiers'
 
 const BRIEF = 'spider-task: T3\nRead the auth module.'
@@ -154,4 +154,11 @@ test('a failed agent keeps why it ended; a done or cancelled one keeps no reason
   expect(agentEnded(spawn(), 'a1', 'max_tokens', 9)[0]).toMatchObject({ status: 'failed', endReason: 'max_tokens' })
   expect(agentEnded(spawn(), 'a1', 'answer', 9)[0]!.endReason).toBeUndefined()
   expect(agentEnded(spawn(), 'a1', 'aborted', 9)[0]!.endReason).toBeUndefined()
+})
+
+test("a reload's missed endings: an agent the host lists as done, failed or killed ends by that word, one it no longer lists is aborted", () => {
+  const running = (agentId: string): SpiderAgent => ({ agentId, status: 'running', startedAt: 0, lastUpdate: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, requests: 0 })
+  const list = [running('a'), running('b'), running('c'), running('d'), running('gone'), { ...running('old'), status: 'done' as const }]
+  const host = [{ id: 'a', status: 'running' }, { id: 'b', status: 'completed' }, { id: 'c', status: 'failed' }, { id: 'd', status: 'killed' }, { id: 'old', status: 'completed' }]
+  expect(missedEndings(list, host)).toEqual([{ agentId: 'b', reason: 'answer' }, { agentId: 'c', reason: 'error' }, { agentId: 'd', reason: 'aborted' }, { agentId: 'gone', reason: 'aborted' }])
 })

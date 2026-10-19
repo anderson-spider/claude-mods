@@ -78,13 +78,15 @@ export type SpiderMain = {
 export type SpiderPanel = { open: boolean }
 
 declare module 'claude-code' {
+  // Shaped: the state outlives a reload of the plugin's code, and a new shape tag (STATE_SHAPE in hooks/register.tsx)
+  // makes the new code drop what an older one wrote instead of reading it.
   interface PluginState {
     'spider-team': {
-      run: SpiderRun | null
-      agents: SpiderAgent[]
-      main: SpiderMain
-      panel: SpiderPanel
-      now: number
+      run: Shaped<SpiderRun | null>
+      agents: Shaped<SpiderAgent[]>
+      main: Shaped<SpiderMain>
+      panel: Shaped<SpiderPanel>
+      now: Shaped<number>
     }
   }
   interface McpToolInputs {

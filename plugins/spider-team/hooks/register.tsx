@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, McpToolInputs, Register, RenderElement, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, answeredModel, resumed, spawned, stepReported, toolName, toolUsed } from './agents'
+import { agentEnded, agentStepped, missedEndings, answeredModel, resumed, spawned, stepReported, toolName, toolUsed } from './agents'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
 import { langOf, t } from './i18n'
@@ -12,16 +12,19 @@ import { TIMELINE_MS, paneModel } from './pane'
 import { allOf, type SchemaFor } from './schema'
 import { applyProgress, bindWorker, isOver, workerEnded } from './state'
 import type { Piece, Style } from './text'
+import { pruned, restorable, savedKey, toSave } from './saved'
 import { svgOf } from './svg'
 import { briefed, taskIdOf } from './tiers'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
-const runAtom = atom({ plugin: 'spider-team', key: 'run' } as const, null as SpiderRun | null)
-const agentsAtom = atom({ plugin: 'spider-team', key: 'agents' } as const, [] as SpiderAgent[])
-const mainAtom = atom({ plugin: 'spider-team', key: 'main' } as const, { usage: ZERO } as SpiderMain)
-const panelAtom = atom({ plugin: 'spider-team', key: 'panel' } as const, { open: false } as SpiderPanel)
-const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0)
+/** The state's shape: change it whenever a stored type changes, so a reload drops what the older code wrote. */
+const STATE_SHAPE = { shape: 'spider-team/1' }
+const runAtom = atom({ plugin: 'spider-team', key: 'run' } as const, null as SpiderRun | null, STATE_SHAPE)
+const agentsAtom = atom({ plugin: 'spider-team', key: 'agents' } as const, [] as SpiderAgent[], STATE_SHAPE)
+const mainAtom = atom({ plugin: 'spider-team', key: 'main' } as const, { usage: ZERO } as SpiderMain, STATE_SHAPE)
+const panelAtom = atom({ plugin: 'spider-team', key: 'panel' } as const, { open: false } as SpiderPanel, STATE_SHAPE)
+const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0, STATE_SHAPE)
 
 const PANE = 'spider-agents'
 /** The narrowest pane the layout is drawn for; a narrower one truncates it. */
@@ -64,7 +67,7 @@ const TASK_SCHEMA = {
 type Ending = { reason: string; now: number; usage?: unknown }
 
 /** What the module keeps between events: the options, the language, the clock's timer and endings heard before their spawn. */
-type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending> }
+type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending>; restoredFor?: string }
 
 /** Engine forks end without a spawn too, so only the latest few endings wait for one. */
 const EARLY_MAX = 20
@@ -135,8 +138,46 @@ function ensureTicker($: Dollar, held: Held): void {
   }))
 }
 
+/** The open run written to the store under this session, or its entry removed once the run closes or goes. */
+async function saveRun($: Dollar): Promise<void> {
+  const [id, run, now] = await Promise.all([$.session.id(), read($, runAtom), $.clock.now()])
+  const saved = toSave(run, now)
+  if (saved) await $.store.set(savedKey(id), saved)
+  else await $.store.delete(savedKey(id))
+}
+
+/**
+ * Once per session id: with no run in memory, the open run the store kept for this session (a restarted app, a resumed
+ * session) comes back; then stale and surplus entries are pruned.
+ */
+async function restoreRun($: Dollar, held: Held): Promise<void> {
+  const id = await $.session.id()
+  if (held.restoredFor === id) return
+  held.restoredFor = id
+  if (!(await read($, runAtom))) {
+    const run = restorable(await $.store.get(savedKey(id)))
+    if (run) await update($, runAtom, current => current ?? run)
+  }
+  const keys = await $.store.keys()
+  const entries = await Promise.all(keys.map(async key => [key, await $.store.get(key)] as [string, unknown]))
+  for (const key of pruned(entries, await $.clock.now())) await $.store.delete(key)
+}
+
+/** `/spider-agents clear`: the run, the agents and Main's usage and turns forgotten, and this session's saved run removed. */
+async function clearAll($: Dollar, held: Held): Promise<string> {
+  const id = await $.session.id()
+  held.early.clear()
+  held.restoredFor = id
+  await update($, runAtom, () => null)
+  await update($, agentsAtom, () => [])
+  await update($, mainAtom, () => ({ usage: ZERO }))
+  await $.store.delete(savedKey(id))
+  return t(held.lang).command.cleared
+}
+
 async function reset($: Dollar, held: Held): Promise<void> {
   held.early.clear()
+  held.restoredFor = undefined
   await update($, runAtom, () => null)
   await update($, agentsAtom, () => [])
   await update($, mainAtom, () => ({ usage: ZERO }))
@@ -147,7 +188,10 @@ async function reset($: Dollar, held: Held): Promise<void> {
 async function endAgent($: Dollar, agentId: string, ending: Ending): Promise<void> {
   await update($, agentsAtom, list => agentEnded(list, agentId, ending.reason, ending.now, ending.usage))
   const taskId = (await read($, agentsAtom)).find(agent => agent.agentId === agentId)?.taskId
-  if (taskId) await update($, runAtom, run => (run && !isOver(run) ? workerEnded(run, taskId, agentId, ending.reason === 'answer', `the worker ended: ${ending.reason}`) : run))
+  if (taskId) {
+    await update($, runAtom, run => (run && !isOver(run) ? workerEnded(run, taskId, agentId, ending.reason === 'answer', `the worker ended: ${ending.reason}`) : run))
+    await observe($, () => saveRun($))
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -183,11 +227,17 @@ export const register: Register = (on, options) => {
         required: ['done', 'total'],
       } satisfies SchemaFor<McpToolInputs['mcp__spider-team__step']>,
     })
-    await $.command.register({ name: PANE, description: 'Toggle the spider agents pane (open or close it)', argumentHint: '[open|close]' })
+    await $.command.register({ name: PANE, description: 'Toggle the spider agents pane (open or close it), or clear what it shows', argumentHint: '[open|close|clear]' })
     // Each step on its own, so an unreadable language or state never leaves the session without its clock.
     await observe($, () => readLanguage($, held))
     if (held.invalid.length) debug($, `spider-team: invalid options fall back to defaults: ${held.invalid.join(', ')}`)
-    await observe($, () => reset($, held))
+    // It fires again on a reload of the plugin's code, whose state the host keeps: the run goes on, and only the
+    // endings missed while the code reloaded are settled. A new session starts empty; /clear and resume reset in session.end.
+    await observe($, () => restoreRun($, held))
+    await observe($, async () => {
+      const now = await $.clock.now()
+      for (const missed of missedEndings(await read($, agentsAtom), await $.agent.list())) await endAgent($, missed.agentId, { reason: missed.reason, now })
+    })
     await observe($, async () => {
       ensureTicker($, held)
       const time = await $.clock.now()
@@ -209,6 +259,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: 'mcp__spider-team__progress' }, async ($, e) => {
     if ((e as { agentId?: string }).agentId !== undefined) return { result: 'refused: only the main session reports the run' }
+    await observe($, () => restoreRun($, held))
     try {
       const now = await $.clock.now()
       let text = ''
@@ -219,6 +270,7 @@ export const register: Register = (on, options) => {
         isNew = !!applied.run && applied.run.runId !== current?.runId
         return applied.run
       })
+      await observe($, () => saveRun($))
       if (isNew && held.config.autoOpen === 'team') await observe($, async () => { await openPane($, held, false) })
       return { result: text }
     } catch (error) {
@@ -277,7 +329,10 @@ export const register: Register = (on, options) => {
         return e.resume && list.some(agent => agent.agentId === agentId) ? resumed(list, agentId, now) : spawned(list, { agentId, type: e.subagentType, model: result.model, prompt: e.prompt, now }, held.config.historyLimit)
       })
       const taskId = taskIdOf(e.prompt)
-      if (taskId) await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))
+      if (taskId) {
+        await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))
+        await observe($, () => saveRun($))
+      }
       const early = held.early.get(agentId)
       // An ending heard before this start belongs to an earlier turn of the agent.
       if (early) { held.early.delete(agentId); if (early.now >= now) await endAgent($, agentId, early) }
@@ -316,7 +371,9 @@ export const register: Register = (on, options) => {
         const now = await $.clock.now()
         await update($, mainAtom, main => mainIdle(main, now, now - TIMELINE_MS))
         await update($, nowAtom, () => now)
-        return readWindow($)
+        await readWindow($)
+        // A resume in this process fires no session.start: Main's first turn under the new id brings its run back.
+        return restoreRun($, held)
       }
       const agentId = e.agentId
       const ending: Ending = { reason: e.reason, now: await $.clock.now(), usage: (e as { usage?: unknown }).usage }
@@ -334,6 +391,7 @@ export const register: Register = (on, options) => {
     if (arg === '') return { text: await togglePane($, held) }
     if (arg === 'open') return { text: await openPane($, held, true) }
     if (arg === 'close') return { text: await closePane($, held) }
+    if (arg === 'clear') return { text: await clearAll($, held) }
     return { text: t(held.lang).command.usage }
   })
 

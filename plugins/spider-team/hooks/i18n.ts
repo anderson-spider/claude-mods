@@ -16,7 +16,7 @@ export type Strings = {
     working: string; idle: string; subagents: string; sub: string; session: string; cost: string; time: string
     steps: string; calls: string; callsOne: string; waits: string; more: string; justNow: string; minutesAgo: string; hoursAgo: string; now: string
   }
-  command: { opened: string; waits: string; closed: string; usage: string }
+  command: { opened: string; waits: string; closed: string; cleared: string; usage: string }
   na: string
 }
 
@@ -39,7 +39,7 @@ export const STRINGS: Record<Lang, Strings> = {
       working: 'working', idle: 'idle', subagents: 'subagents', sub: 'sub', session: 'Session', cost: 'cost', time: 'time',
       steps: 'steps', calls: 'calls', callsOne: 'call', waits: 'waits', more: '+{n} more', justNow: 'just now', minutesAgo: '{n} min ago', hoursAgo: '{n} h ago', now: 'now',
     },
-    command: { opened: 'Agents pane open.', waits: 'The agents pane waits for room:', closed: 'Agents pane closed.', usage: 'Usage: /spider-agents [open|close]' },
+    command: { opened: 'Agents pane open.', waits: 'The agents pane waits for room:', closed: 'Agents pane closed.', cleared: 'Agents pane cleared: the run, the agents and their usage are forgotten.', usage: 'Usage: /spider-agents [open|close|clear]' },
     na: 'N/A',
   },
   'pt-BR': {
@@ -54,7 +54,7 @@ export const STRINGS: Record<Lang, Strings> = {
       working: 'trabalhando', idle: 'ocioso', subagents: 'subagentes', sub: 'sub', session: 'Sessão', cost: 'custo', time: 'tempo',
       steps: 'passos', calls: 'chamadas', callsOne: 'chamada', waits: 'aguarda', more: '+{n} mais', justNow: 'agora', minutesAgo: 'há {n} min', hoursAgo: 'há {n} h', now: 'agora',
     },
-    command: { opened: 'Painel de agentes aberto.', waits: 'O painel de agentes espera espaço:', closed: 'Painel de agentes fechado.', usage: 'Uso: /spider-agents [open|close]' },
+    command: { opened: 'Painel de agentes aberto.', waits: 'O painel de agentes espera espaço:', closed: 'Painel de agentes fechado.', cleared: 'Painel de agentes limpo: a execução, os agentes e o uso foram esquecidos.', usage: 'Uso: /spider-agents [open|close|clear]' },
     na: 'N/A',
   },
 }

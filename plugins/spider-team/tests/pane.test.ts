@@ -116,19 +116,22 @@ test('a long task title is cut so its owner and state stay in view', () => {
   expect(line).toContain('worker · running')
 })
 
-test("the timeline has a lane per role, Main first, lit in one-minute buckets where it worked, and an axis", () => {
+test("the timeline always has Main and the four roles, idle ones empty, then other types that worked, lit in one-minute buckets, and an axis", () => {
   const now = 20 * 60_000
   const main: SpiderMain = { ...MAIN, busySince: undefined, turns: [[6 * 60_000, 7 * 60_000]] }
   const old = { ...EXPLORE, agentId: 'old', endedAt: 60_000 }
-  const lines = card('timeline', { now, main, agents: [{ ...WORKER, startedAt: 18 * 60_000 }, old] })!.lines
-  expect(lines.map(l => l[0]!.text.trim())).toEqual(['main', 'worker', ''])
+  const explore = { ...EXPLORE, agentId: 'e', startedAt: 15 * 60_000, endedAt: 16 * 60_000 }
+  const lines = card('timeline', { now, main, agents: [{ ...WORKER, startedAt: 18 * 60_000 }, old, explore] })!.lines
+  expect(lines.map(l => l[0]!.text.trim())).toEqual(['main', 'planner', 'worker', 'researcher', 'reviewer', 'Explore', ''])
+  expect(lines[4]!.map(p => [p.style, p.tone])).toEqual([['plain', 'planMode'], ['barEmpty', undefined]])
   expect(lines[0]![0]!.tone).toBe('claude')
   const cw = (110 - FRAME - 12) / 15 | 0
   expect(all([lines[0]!]).slice(12)).toBe(`${'·'.repeat(cw)}${'━'.repeat(cw)}${'·'.repeat(13 * cw)}`)
-  expect(all([lines[1]!]).slice(12).endsWith(`${'·'.repeat(cw)}${'━'.repeat(2 * cw)}`)).toBe(true)
-  expect(lines[1]!.find(p => p.text.includes('━'))!.tone).toBe('suggestion')
-  expect(all([lines[2]!])).toMatch(/^ +−15m +now$/)
-  expect(card('timeline', { now: 60 * 60_000, main: { ...MAIN, busySince: undefined }, agents: [old] })).toBeUndefined()
+  expect(all([lines[2]!]).slice(12).endsWith(`${'·'.repeat(cw)}${'━'.repeat(2 * cw)}`)).toBe(true)
+  expect(lines[2]!.find(p => p.text.includes('━'))!.tone).toBe('suggestion')
+  expect(all([lines[6]!])).toMatch(/^ +−15m +now$/)
+  const quiet = card('timeline', { now: 60 * 60_000, main: { ...MAIN, busySince: undefined }, agents: [old] })!.lines
+  expect(quiet.map(l => l[0]!.text.trim())).toEqual(['main', 'planner', 'worker', 'researcher', 'reviewer', ''])
 })
 
 test('without a run the pane still lists agents, and without agents it says so', () => {
