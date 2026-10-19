@@ -9,39 +9,57 @@ export type Strings = {
   tasks: string
   agent: string
   agents: string
+  counts: { accepted: string; acceptedOne: string; running: string; left: string; leftOne: string; failed: string; failedOne: string; recent: string; recentOne: string }
   phase: Record<SpiderPhase, string>
   status: Record<SpiderAgent['status'], string>
   task: { pending: string; blocked: string; running: string; reviewing: string; completed: string; failed: string; cancelled: string }
-  pane: { title: string; noRun: string; noAgents: string; others: string; tasks: string; totals: string; main: string; subagents: string; session: string; compact: string; expanded: string }
-  column: { agent: string; model: string; effort: string; status: string; steps: string; tokens: string; context: string; cost: string; time: string }
+  pane: {
+    title: string; noRun: string; noAgents: string; plan: string; running: string; recent: string; others: string; timeline: string; totals: string
+    main: string; subagents: string; session: string; compact: string; expanded: string; tokens: string; cost: string; context: string
+    steps: string; calls: string; callsOne: string; waits: string; more: string; justNow: string; minutesAgo: string; hoursAgo: string; now: string; finished: string
+  }
   command: { opened: string; waits: string; closed: string; usage: string }
   na: string
 }
 
+/** `n` and the word for it: `one` for exactly one, else `many`. */
+export const counted = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+
+/** `{n}` in a string replaced by `n`. */
+export const fill = (text: string, n: number | string): string => text.replace('{n}', String(n))
+
 export const STRINGS: Record<Lang, Strings> = {
   en: {
-    team: 'SPIDER TEAM',
+    team: 'spider',
     tasks: 'tasks',
     agent: 'agent',
     agents: 'agents',
+    counts: { accepted: 'accepted', acceptedOne: 'accepted', running: 'running', left: 'left', leftOne: 'left', failed: 'failed', failedOne: 'failed', recent: 'recent', recentOne: 'recent' },
     phase: { understand: 'Understand', plan: 'Plan', investigate: 'Investigate', execute: 'Execute', review: 'Review', verify: 'Verify', complete: 'Complete', cancelled: 'Cancelled', failed: 'Failed' },
     status: { running: 'running', done: 'done', failed: 'failed', cancelled: 'cancelled' },
     task: { pending: 'pending', blocked: 'blocked', running: 'running', reviewing: 'reviewing', completed: 'accepted', failed: 'failed', cancelled: 'cancelled' },
-    pane: { title: 'Spider agents', noRun: 'No spider-team run', noAgents: 'No agents yet', others: 'OTHER AGENTS', tasks: 'TASKS', totals: 'TOTALS', main: 'Main', subagents: 'Subagents', session: 'Session', compact: 'compact', expanded: 'expanded' },
-    column: { agent: 'AGENT', model: 'MODEL', effort: 'EFFORT', status: 'STATUS', steps: 'STEPS', tokens: 'TOKENS', context: 'CONTEXT', cost: 'COST', time: 'TIME' },
+    pane: {
+      title: 'Spider agents', noRun: 'No spider-team run', noAgents: 'No agents yet', plan: 'Plan', running: 'Running', recent: 'Recent', others: 'Other agents', timeline: 'Last 15 minutes', totals: 'Totals',
+      main: 'Main', subagents: 'Subagents', session: 'Session', compact: 'compact view', expanded: 'full view', tokens: 'Tokens', cost: 'Cost', context: 'Context',
+      steps: 'steps', calls: 'calls', callsOne: 'call', waits: 'waits', more: '+{n} more', justNow: 'just now', minutesAgo: '{n} min ago', hoursAgo: '{n} h ago', now: 'now', finished: 'finished',
+    },
     command: { opened: 'Agents pane open.', waits: 'The agents pane waits for room:', closed: 'Agents pane closed.', usage: 'Usage: /spider-agents [open|close]' },
     na: 'N/A',
   },
   'pt-BR': {
-    team: 'SPIDER TEAM',
+    team: 'spider',
     tasks: 'tarefas',
     agent: 'agente',
     agents: 'agentes',
+    counts: { accepted: 'aceitas', acceptedOne: 'aceita', running: 'rodando', left: 'faltam', leftOne: 'falta', failed: 'falharam', failedOne: 'falhou', recent: 'recentes', recentOne: 'recente' },
     phase: { understand: 'Entender', plan: 'Planejar', investigate: 'Investigar', execute: 'Executar', review: 'Revisão', verify: 'Verificar', complete: 'Concluído', cancelled: 'Cancelado', failed: 'Falhou' },
     status: { running: 'rodando', done: 'concluído', failed: 'falhou', cancelled: 'cancelado' },
     task: { pending: 'pendente', blocked: 'bloqueada', running: 'rodando', reviewing: 'em revisão', completed: 'aceita', failed: 'falhou', cancelled: 'cancelada' },
-    pane: { title: 'Agentes spider', noRun: 'Nenhuma execução do spider-team', noAgents: 'Nenhum agente ainda', others: 'OUTROS AGENTES', tasks: 'TAREFAS', totals: 'TOTAIS', main: 'Main', subagents: 'Subagentes', session: 'Sessão', compact: 'compacto', expanded: 'expandido' },
-    column: { agent: 'AGENTE', model: 'MODELO', effort: 'EFFORT', status: 'ESTADO', steps: 'PASSOS', tokens: 'TOKENS', context: 'CONTEXTO', cost: 'CUSTO', time: 'TEMPO' },
+    pane: {
+      title: 'Agentes spider', noRun: 'Nenhuma execução do spider-team', noAgents: 'Nenhum agente ainda', plan: 'Plano', running: 'Rodando', recent: 'Recentes', others: 'Outros agentes', timeline: 'Últimos 15 minutos', totals: 'Totais',
+      main: 'Main', subagents: 'Subagentes', session: 'Sessão', compact: 'visão compacta', expanded: 'visão completa', tokens: 'Tokens', cost: 'Custo', context: 'Contexto',
+      steps: 'passos', calls: 'chamadas', callsOne: 'chamada', waits: 'aguarda', more: '+{n} mais', justNow: 'agora', minutesAgo: 'há {n} min', hoursAgo: 'há {n} h', now: 'agora', finished: 'terminou',
+    },
     command: { opened: 'Painel de agentes aberto.', waits: 'O painel de agentes espera espaço:', closed: 'Painel de agentes fechado.', usage: 'Uso: /spider-agents [open|close]' },
     na: 'N/A',
   },

@@ -1,14 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, McpToolInputs, Register, RenderElement, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, agentsOfRun, answeredModel, resumed, spawned, stepReported } from './agents'
-import { bandLines } from './band'
+import { agentEnded, agentStepped, agentsOfRun, answeredModel, resumed, spawned, stepReported, toolUsed } from './agents'
+import { bandLine } from './band'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
 import { langOf, t } from './i18n'
 import type { Lang } from './i18n'
 import { ZERO, mainUsed } from './metrics'
-import { paneLines } from './pane'
+import { FRAME, paneModel } from './pane'
 import { allOf, type SchemaFor } from './schema'
 import { applyProgress, bindWorker, isOver, workerEnded } from './state'
 import type { Piece, Style } from './text'
@@ -236,6 +236,20 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // Every tool a subagent calls is its activity; the answer goes back unchanged, and a call that throws is not counted.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    const agentId = (e as { agentId?: string }).agentId
+    if (agentId !== undefined) {
+      const failed = result.deny !== undefined || result.isError === true
+      void observe($, async () => {
+        const now = await $.clock.now()
+        await update($, agentsAtom, list => toolUsed(list, agentId, (e as { tool: string }).tool, failed, now))
+      })
+    }
+    return result
+  })
+
   // A spider-team worker's brief gets the step request appended; every spawned agent is tracked, and one whose brief
   // names a task starts that task. A resume keeps its prompt (the host ignores a rewrite) and runs its agent again.
   // autoOpen any opens the pane when an agent starts with none running, so a pane closed mid-work stays closed.
@@ -313,20 +327,16 @@ export const register: Register = (on, options) => {
       if (!run || panel.dismissedRunId === run.runId) return below
       const { Box, Text, Button } = $.ui.resolve(e)
       const ours = agentsOfRun(run, agents)
-      const running = ours.filter(agent => agent.status === 'running').length
-      const lines = bandLines({ run, running, agents: ours.length, columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
-      const text = (line: Piece[], key: string) => <Text key={key} wrap="truncate-end">{line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>)}</Text>
+      const active = ours.filter(agent => agent.status === 'running')
+      const lastTool = [...active].sort((a, b) => b.lastUpdate - a.lastUpdate).find(agent => agent.activity)?.activity?.tools.at(-1)
+      const line = bandLine({ run, running: active.length, agents: ours.length, ...(lastTool ? { lastTool } : {}), columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
       const dismiss = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, dismissedRunId: run.runId })) })
-      const drawn = <Box flexDirection="column" width={e.props.bodyColumns}>
-        {text(lines[0]!, 'title')}
-        {text(lines[1]!, 'bar')}
-        <Box flexDirection="row">
-          {text(lines[2]!, 'status')}
-          <Box flexGrow={1} />
-          <Button key="spider-pane" plain label={`×${ours.length}`} onPress={() => void observe($, async () => { await togglePane($, held) })} />
-          <Text> </Text>
-          <Button key="spider-dismiss" plain label="✕" onPress={dismiss} />
-        </Box>
+      const drawn = <Box flexDirection="row" width={e.props.bodyColumns}>
+        <Text key="band" wrap="truncate-end">{line.map((piece, i) => <Text key={`band-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>)}</Text>
+        <Box flexGrow={1} />
+        <Button key="spider-pane" plain label={`×${ours.length}`} onPress={() => void observe($, async () => { await togglePane($, held) })} />
+        <Text> </Text>
+        <Button key="spider-dismiss" plain label="✕" onPress={dismiss} />
       </Box>
       return <Box flexDirection="column">{drawn}{below}</Box>
     } catch (error) {
@@ -341,11 +351,25 @@ export const register: Register = (on, options) => {
       const [run, agents, main, panel, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, mainAtom), read($, panelAtom), read($, nowAtom)])
       const { Box, Text, Button } = $.ui.resolve(e)
       const s = t(held.lang)
-      const lines = paneLines({ run, agents, main, config: held.config, compact: panel.compact, columns: Math.max(PANE_MIN_COLUMNS, e.props.bodyColumns), lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
+      const columns = Math.max(PANE_MIN_COLUMNS, e.props.bodyColumns)
+      const model = paneModel({ run, agents, main, config: held.config, compact: panel.compact, columns, lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
       const flip = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, compact: !current.compact })) })
-      return <Box flexDirection="column">
-        <Button key="spider-compact" plain hotkey="c" label={panel.compact ? s.pane.expanded : s.pane.compact} onPress={flip} />
-        {lines.map((line, i) => <Text key={`line-${i}`} wrap="truncate-end">{line.length ? line.map((piece, j) => <Text key={`p-${i}-${j}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>)}
+      const text = (line: Piece[], key: string) => <Text key={key} wrap="truncate-end">{line.length ? line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>
+      return <Box flexDirection="column" width={columns} gap={1}>
+        {text(model.header, 'header')}
+        {model.sections.map(section => <Box key={`section-${section.key}`} flexDirection="column" borderStyle="round" borderColor={section.border} paddingX={1} width={columns}>
+          <Box key={`title-${section.key}`} flexDirection="row" width={columns - FRAME}>
+            <Text key={`name-${section.key}`} bold color={section.border === 'subtle' || section.border === 'inactive' ? 'inactive' : section.border}>{section.title}</Text>
+            <Box flexGrow={1} />
+            {text(section.aside, `aside-${section.key}`)}
+          </Box>
+          {section.lines.map((line, i) => text(line, `${section.key}-${i}`))}
+        </Box>)}
+        <Box key="footer" flexDirection="row" width={columns}>
+          {text(model.footer, 'footer')}
+          <Box flexGrow={1} />
+          <Button key="spider-compact" plain hotkey="c" label={panel.compact ? s.pane.expanded : s.pane.compact} onPress={flip} />
+        </Box>
       </Box>
     } catch (error) {
       debug($, 'spider-progress: pane render failed', error)

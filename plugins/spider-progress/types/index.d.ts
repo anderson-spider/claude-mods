@@ -54,6 +54,10 @@ export type SpiderAgent = {
   contextTokens?: number
   contextWindow?: number
   steps?: { done: number; total: number; note?: string }
+  /** Its tool calls: the last few tools by name, how many calls and how many came back as errors. */
+  activity?: { tools: string[]; calls: number; errors: number }
+  /** Why a failed agent ended (`max_tokens`, `error`...). */
+  endReason?: string
 }
 
 export type SpiderMain = { model?: string; usage: SpiderUsage; costUsd?: number; costPartial?: true; contextTokens?: number; contextWindow?: number }
