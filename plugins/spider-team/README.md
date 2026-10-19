@@ -45,7 +45,7 @@ Set them in `/plugin` (or `pluginConfigs["spider-team@spider-claude-mods"].optio
 | `language` | `auto` | the pane language: `auto` follows the Claude Code language setting, then the system locale; `pt-BR` or `en` fix it |
 | `autoOpen` | `team` | when the pane opens on its own: `team` when a run starts, `any` when a subagent starts with none running, `off` only with `/spider-agents`; a pane you close stays closed for the agents already at work |
 | `showCost`, `showTokens`, `showContext` | on | the estimated cost, the token counts and the context of each agent |
-| `animations` | on | a spinner beside running agents; off keeps a fixed mark |
+| `animations` | on | a spinner beside running agents and a moving rail into the running card; off keeps them still |
 | `historyLimit` | 200 | how many agents the pane remembers (20 to 1000) |
 
 An invalid pane option falls back to its default. An effort you ask for in the conversation, for a role or a task, goes in place of the option. With [subagent-effort](../subagent-effort/README.md) active, Jev's rating replaces the effort of every subagent call, yours included: that is how the plugin works, and spider-team does not work around it. The session's own effort is yours to set with `/effort`; neither plugin changes it.
@@ -58,13 +58,14 @@ An invalid pane option falls back to its default. An effort you ask for in the c
 
 ## Agents pane
 
-- **Pane**: `/spider-agents` toggles it, `/spider-agents open` opens or focuses it, `/spider-agents close` closes it. A header with the run's title and phase and how many agents run and finished, then bordered sections in your theme's colours:
-  - **Plan**: the tasks as a tree (a task hangs under the last task it comes after) with owner and state, the agent on it and its steps, what a blocked task waits for, a failed task's last error and an accepted task's evidence.
-  - **Running**: each running agent with its task, model and effort (planned → actual when they differ; planned is the role's default, since the host does not report the effort a call asked for, so a role effort set in the options below or a rating from subagent-effort shows as a change), time, context, steps, tokens sent and received and estimated cost, then what it is on: its last step note, its latest tools, its call count and its failed calls. A wide pane keeps the figures on the agent's line; a narrow one moves them to the next.
-  - **Recent**: the run's finished agents, newest first, with how long they ran, why a failed one ended and how long ago.
-  - **Other agents**: the session's agents outside the run.
-  - **Last 15 minutes**: a bar per agent over time, running, finished or failed.
-  - **Totals**: tokens, cost and context of the session's main thread, its subagents and the whole session.
+- **Pane**: `/spider-agents` toggles it, `/spider-agents open` opens or focuses it, `/spider-agents close` closes it. A header with a `SPIDER` badge, the run's title and phase and how many of its agents run, then cards in your theme's colours, joined by a rail that runs while agents work (with `animations` on):
+  - **Session**: Main's model and effort, whether it is working, its context as a gauge and its tokens, then the estimated cost of Main, the subagents and the session, and the run's time.
+  - **Plan**: accepted of the planned tasks and a gauge, then the tasks as a tree (a task hangs under the last task it comes after) with owner and state, the agent on it and its steps, what a blocked task waits for, a failed task's last error and an accepted task's evidence.
+  - **Agents · running**: each running agent in its role's colour with its model, one block per attempt at its task (earlier ones green or red), its time and task, then what it is on: effort (planned → actual when they differ; planned is the role's default, since the host does not report the effort a call asked for, so a role effort set in the options below or a rating from subagent-effort shows as a change), steps, latest tools, call count and failed calls, context, tokens and cost.
+  - **Agents · finished**: the session's finished agents, newest first, with how long they ran, why a failed one ended and how long ago.
+  - **Agents · planned**: the role tasks no agent has taken yet, with the role's model.
+  - **Last 15 minutes**: a lane per role (Main first), lit in the minutes it worked.
+- On the terminal the cards are drawn with box characters; on the desktop as one picture with outlined plates, in light or dark colours by the system's scheme. A pane short of rows leaves out the timeline first, then the finished and the planned agents.
 - **Outside a run** the pane still lists every subagent.
 
 ### What it shows and what it does not

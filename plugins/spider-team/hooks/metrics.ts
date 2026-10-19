@@ -48,6 +48,16 @@ export function mainUsed(main: SpiderMain, model: string | undefined, raw: unkno
   }
 }
 
+/** Main's turn is working: when its first request was asked and the effort its requests run at. */
+export const mainBusy = (main: SpiderMain, asked: number, effort?: string): SpiderMain => ({ ...main, ...(effort ? { effort } : {}), busySince: main.busySince ?? asked })
+
+/** Main's turn ended: its span joins the turns that ended at or after `keepFrom`. */
+export function mainIdle(main: SpiderMain, now: number, keepFrom: number): SpiderMain {
+  const { busySince, ...rest } = main
+  if (busySince === undefined) return main
+  return { ...rest, turns: [...(main.turns ?? []).filter(([, end]) => end >= keepFrom), [busySince, now]] }
+}
+
 export type Totals = { usage: SpiderUsage; costUsd?: number; costPartial: boolean }
 
 const totalOf = (parts: { usage: SpiderUsage; costUsd?: number; costPartial?: true }[]): Totals => {

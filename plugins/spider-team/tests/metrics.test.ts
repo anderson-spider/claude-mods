@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent, SpiderMain } from '../types'
-import { ZERO, addUsage, costOf, formatCost, formatDuration, formatTokens, hasTokens, mainUsed, totalsOf, usageOf } from '../hooks/metrics'
+import { ZERO, addUsage, costOf, formatCost, formatDuration, formatTokens, hasTokens, mainBusy, mainIdle, mainUsed, totalsOf, usageOf } from '../hooks/metrics'
 import { priceOf } from '../hooks/prices'
 
 const near = (v: number | undefined) => (v === undefined ? v : Math.round(v * 1e6) / 1e6)
@@ -80,4 +80,12 @@ test("Main's request adds usage and cost; an unpriced request with no tokens lea
   expect(empty.costPartial).toBeUndefined()
   expect(mainUsed(priced, 'gpt-9', { input_tokens: 10 }).costPartial).toBe(true)
   expect(mainUsed(priced, 'claude-sonnet-5-5', null)).toEqual({ ...priced, model: 'claude-sonnet-5-5' })
+})
+
+test("Main is busy from its turn's first request, and its ended turns are kept for the timeline's window", () => {
+  const busy = mainBusy(mainBusy({ usage: ZERO }, 10, 'high'), 20)
+  expect(busy).toEqual({ usage: ZERO, effort: 'high', busySince: 10 })
+  const idle = mainIdle({ ...busy, turns: [[0, 4], [5, 8]] }, 30, 6)
+  expect(idle).toEqual({ usage: ZERO, effort: 'high', turns: [[5, 8], [10, 30]] })
+  expect(mainIdle(idle, 40, 0)).toBe(idle)
 })

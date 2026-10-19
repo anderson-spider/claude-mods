@@ -6,11 +6,13 @@ import { configOf } from './config'
 import type { SpiderConfig } from './config'
 import { langOf, t } from './i18n'
 import type { Lang } from './i18n'
-import { ZERO, mainUsed } from './metrics'
-import { FRAME, paneModel } from './pane'
+import { ZERO, mainBusy, mainIdle, mainUsed } from './metrics'
+import { terminalLines } from './cards'
+import { TIMELINE_MS, paneModel } from './pane'
 import { allOf, type SchemaFor } from './schema'
 import { applyProgress, bindWorker, isOver, workerEnded } from './state'
 import type { Piece, Style } from './text'
+import { svgOf } from './svg'
 import { briefed, taskIdOf } from './tiers'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
@@ -24,6 +26,8 @@ const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0)
 const PANE = 'spider-agents'
 /** The narrowest pane the layout is drawn for; a narrower one truncates it. */
 const PANE_MIN_COLUMNS = 20
+/** The most characters an `Svg` source may hold. */
+const SVG_MAX = 131_072
 /** How much of an error message a debug line keeps. */
 const ERROR_MAX = 200
 const PHASES = allOf<SpiderPhase>()('understand', 'plan', 'investigate', 'execute', 'review', 'verify', 'complete', 'cancelled', 'failed')
@@ -66,7 +70,7 @@ type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Time
 const EARLY_MAX = 20
 
 /** Theme keys only, so the pane follows the person's Claude Code theme. */
-const PAINT: Record<Style, { color?: string; weight?: 'bold'; dimColor?: boolean }> = {
+const PAINT: Record<Style, { color?: string; backgroundColor?: string; weight?: 'bold'; dimColor?: boolean }> = {
   plain: {},
   title: { weight: 'bold' },
   dim: { dimColor: true },
@@ -75,7 +79,11 @@ const PAINT: Record<Style, { color?: string; weight?: 'bold'; dimColor?: boolean
   error: { color: 'error', weight: 'bold' },
   bar: { color: 'claude' },
   barEmpty: { color: 'subtle' },
+  badge: { color: 'inverseText', backgroundColor: 'claude', weight: 'bold' },
 }
+
+/** A piece's paint: its style's, in its tone's colour when it has one. */
+const paint = (piece: Piece) => (piece.tone ? { ...PAINT[piece.style], color: piece.tone, dimColor: undefined } : PAINT[piece.style])
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, ERROR_MAX)
 
@@ -116,11 +124,12 @@ async function readLanguage($: Dollar, held: Held): Promise<void> {
   held.lang = langOf(held.config.language, typeof settings.language === 'string' ? settings.language : undefined, { LC_ALL, LC_MESSAGES, LANG })
 }
 
-/** Durations and spinners move once a second, only while an agent runs. */
+/** Durations, spinners and the timeline move once a second, only while an agent runs or Main's turn does. */
 function ensureTicker($: Dollar, held: Held): void {
   if (held.ticker) return
   held.ticker = $.clock.every(1_000, () => void observe($, async () => {
-    if (!(await read($, agentsAtom)).some(agent => agent.status === 'running')) return
+    const [agents, main] = await Promise.all([read($, agentsAtom), read($, mainAtom)])
+    if (!agents.some(agent => agent.status === 'running') && main.busySince === undefined) return
     const time = await $.clock.now()
     await update($, nowAtom, () => time)
   }))
@@ -281,6 +290,9 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.step', async function* ($, e, next) {
+    // Main's turn is busy from when its request is asked; a clock failure is the observation's to log.
+    const asked = $.clock.now()
+    asked.catch(() => undefined)
     const answer = yield* next(e)
     void observe($, async () => {
       const now = await $.clock.now()
@@ -290,7 +302,9 @@ export const register: Register = (on, options) => {
         return
       }
       const model = answeredModel(answer.usage, e.model)
-      await update($, mainAtom, main => mainUsed(main, model, answer.usage))
+      const effort = typeof e.effort === 'string' ? e.effort : undefined
+      const since = await asked
+      await update($, mainAtom, main => mainBusy(mainUsed(main, model, answer.usage), since, effort))
     })
     return answer
   })
@@ -298,7 +312,12 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     void observe($, async () => {
-      if (e.agentId === undefined) return readWindow($)
+      if (e.agentId === undefined) {
+        const now = await $.clock.now()
+        await update($, mainAtom, main => mainIdle(main, now, now - TIMELINE_MS))
+        await update($, nowAtom, () => now)
+        return readWindow($)
+      }
       const agentId = e.agentId
       const ending: Ending = { reason: e.reason, now: await $.clock.now(), usage: (e as { usage?: unknown }).usage }
       if ((await read($, agentsAtom)).some(agent => agent.agentId === agentId && agent.status === 'running')) return endAgent($, agentId, ending)
@@ -322,22 +341,21 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     try {
       const [run, agents, main, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, mainAtom), read($, nowAtom)])
-      const { Box, Text } = $.ui.resolve(e)
+      const ui = $.ui.resolve(e)
+      const { Box, Text } = ui
       const columns = Math.max(PANE_MIN_COLUMNS, e.props.bodyColumns)
-      const model = paneModel({ run, agents, main, config: held.config, columns, lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
-      // Lines are laid out in cells (padded columns, the plan's tree, the timeline's bars): `mono` keeps them aligned
+      const model = paneModel({ run, agents, main, config: held.config, columns, lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000), rows: e.props.scroll.bodyRows })
+      // Lines are laid out in cells (the borders, the plan's tree, the timeline's buckets): `mono` keeps them aligned
       // on a surface whose body font is proportional, as the desktop's is; the terminal ignores it.
-      const text = (line: Piece[], key: string) => <Text key={key} mono wrap="truncate-end">{line.length ? line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>
+      const text = (line: Piece[], key: string) => <Text key={key} mono wrap="truncate-end">{line.length ? line.map((piece, i) => <Text key={`${key}-${i}`} {...paint(piece)}>{piece.text}</Text>) : ' '}</Text>
+      // Only a graphical surface draws the cards as a picture; the terminal, which has no `Svg`, draws them as lines.
+      if (e.surface === 'terminal' || !('Svg' in ui)) return <Box flexDirection="column" width={columns}>{terminalLines(model, columns).map((line, i) => text(line, `line-${i}`))}</Box>
+      const drawing = svgOf(model, columns)
+      // A drawing past the host's limit falls back to the terminal's lines.
+      if (drawing.source.length > SVG_MAX) return <Box flexDirection="column" width={columns}>{terminalLines(model, columns).map((line, i) => text(line, `line-${i}`))}</Box>
       return <Box flexDirection="column" width={columns} gap={1}>
         {text(model.header, 'header')}
-        {model.sections.map(section => <Box key={`section-${section.key}`} flexDirection="column" borderStyle="round" borderColor={section.border} paddingX={1} width={columns}>
-          <Box key={`title-${section.key}`} flexDirection="row" width={columns - FRAME}>
-            <Text key={`name-${section.key}`} mono wrap="truncate-end" weight="bold" {...(section.border === 'subtle' || section.border === 'inactive' ? { dimColor: true } : { color: section.border })}>{section.title}</Text>
-            <Box flexGrow={1} />
-            {text(section.aside, `aside-${section.key}`)}
-          </Box>
-          {section.lines.map((line, i) => text(line, `${section.key}-${i}`))}
-        </Box>)}
+        <ui.Svg key="cards" source={drawing.source} alt={t(held.lang).pane.title} {...(drawing.moving ? { isInteractive: true } : {})} />
         {text(model.footer, 'footer')}
       </Box>
     } catch (error) {

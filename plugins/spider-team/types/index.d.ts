@@ -60,7 +60,20 @@ export type SpiderAgent = {
   endReason?: string
 }
 
-export type SpiderMain = { model?: string; usage: SpiderUsage; costUsd?: number; costPartial?: true; contextTokens?: number; contextWindow?: number }
+export type SpiderMain = {
+  model?: string
+  /** The effort Main's last request ran at. */
+  effort?: string
+  usage: SpiderUsage
+  costUsd?: number
+  costPartial?: true
+  contextTokens?: number
+  contextWindow?: number
+  /** When Main's current turn asked its first request; absent while Main is idle. */
+  busySince?: number
+  /** Main's ended turns of the last 15 minutes, as [start, end]. */
+  turns?: [number, number][]
+}
 
 export type SpiderPanel = { open: boolean }
 
