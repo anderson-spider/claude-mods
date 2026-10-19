@@ -26,6 +26,8 @@ const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0)
 const PANE = 'spider-agents'
 /** The narrowest pane the layout is drawn for; a narrower one truncates it. */
 const PANE_MIN_COLUMNS = 20
+/** The most characters an `Svg` source may hold. */
+const SVG_MAX = 131_072
 /** How much of an error message a debug line keeps. */
 const ERROR_MAX = 200
 const PHASES = allOf<SpiderPhase>()('understand', 'plan', 'investigate', 'execute', 'review', 'verify', 'complete', 'cancelled', 'failed')
@@ -122,11 +124,12 @@ async function readLanguage($: Dollar, held: Held): Promise<void> {
   held.lang = langOf(held.config.language, typeof settings.language === 'string' ? settings.language : undefined, { LC_ALL, LC_MESSAGES, LANG })
 }
 
-/** Durations and spinners move once a second, only while an agent runs. */
+/** Durations, spinners and the timeline move once a second, only while an agent runs or Main's turn does. */
 function ensureTicker($: Dollar, held: Held): void {
   if (held.ticker) return
   held.ticker = $.clock.every(1_000, () => void observe($, async () => {
-    if (!(await read($, agentsAtom)).some(agent => agent.status === 'running')) return
+    const [agents, main] = await Promise.all([read($, agentsAtom), read($, mainAtom)])
+    if (!agents.some(agent => agent.status === 'running') && main.busySince === undefined) return
     const time = await $.clock.now()
     await update($, nowAtom, () => time)
   }))
@@ -312,6 +315,7 @@ export const register: Register = (on, options) => {
       if (e.agentId === undefined) {
         const now = await $.clock.now()
         await update($, mainAtom, main => mainIdle(main, now, now - TIMELINE_MS))
+        await update($, nowAtom, () => now)
         return readWindow($)
       }
       const agentId = e.agentId
@@ -347,6 +351,8 @@ export const register: Register = (on, options) => {
       // Only a graphical surface draws the cards as a picture; the terminal, which has no `Svg`, draws them as lines.
       if (e.surface === 'terminal' || !('Svg' in ui)) return <Box flexDirection="column" width={columns}>{terminalLines(model, columns).map((line, i) => text(line, `line-${i}`))}</Box>
       const drawing = svgOf(model, columns)
+      // A drawing past the host's limit falls back to the terminal's lines.
+      if (drawing.source.length > SVG_MAX) return <Box flexDirection="column" width={columns}>{terminalLines(model, columns).map((line, i) => text(line, `line-${i}`))}</Box>
       return <Box flexDirection="column" width={columns} gap={1}>
         {text(model.header, 'header')}
         <ui.Svg key="cards" source={drawing.source} alt={t(held.lang).pane.title} {...(drawing.moving ? { isInteractive: true } : {})} />

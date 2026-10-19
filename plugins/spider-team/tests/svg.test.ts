@@ -37,3 +37,10 @@ test('the rail into the running card moves only with motion, and only then is th
   expect(moving.source).toContain('<animate attributeName="cx"')
   expect(svgOf(model({ motion: true, cards: [RUNNING, PLAN] }), 40).moving).toBe(false)
 })
+
+test('a lane of timeline cells is one shape, and control characters never reach the markup', () => {
+  const lane: Card = { key: 'timeline', tone: 'merged', title: 'Last 15 minutes', aside: [], lines: [[{ text: '━'.repeat(200), style: 'bar', tone: 'claude' }, p('·'.repeat(200), 'barEmpty')], [p('bad\u0007\nnote')]] }
+  const source = svgOf(model({ cards: [lane] }), 420).source
+  expect(source.match(/<rect /g)?.length).toBe(2)
+  expect(source).toContain('>bad  note<')
+})

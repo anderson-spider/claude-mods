@@ -3,7 +3,7 @@
 // attempt blocks and the timeline as shapes, and rails between plates. The rail into the running card moves (SMIL) while
 // agents run. Colours follow the system's light or dark scheme. Pure.
 import type { Card, PaneModel } from './pane'
-import { cells } from './text'
+import { cells, cut } from './text'
 import type { Piece, Style, Tone } from './text'
 
 /** A cell's width and a row's height in CSS pixels, at the font size below. */
@@ -27,7 +27,8 @@ const STYLE_COLOUR: Record<Style, Colour> = { plain: 'fg', title: 'fg', dim: 'di
 const rules = (palette: Record<Colour, string>) => Object.entries(palette).map(([key, hex]) => `.f-${key}{fill:${hex}}.s-${key}{stroke:${hex}}`).join('')
 const STYLE = `<style>text{font-family:ui-monospace,Menlo,'SF Mono',monospace;font-size:${FONT}px;white-space:pre}.b{font-weight:700}${rules(DARK)}@media (prefers-color-scheme: light){${rules(LIGHT)}}</style>`
 
-const esc = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+// Control characters and lone surrogates are not XML: they would void the whole drawing.
+const esc = (text: string) => text.replace(/[\u0000-\u001f\u007f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const n = (value: number) => String(Math.round(value * 10) / 10)
 const colourOf = (piece: Piece): Colour => (piece.style === 'barEmpty' ? 'subtle' : piece.tone ?? STYLE_COLOUR[piece.style])
 
@@ -56,6 +57,13 @@ function shape(ch: string, colour: Colour, col: number, row: number): string | n
   }
 }
 
+/** A run of `length` timeline cells as one rect: lit, or the dim track. */
+function stretch(ch: string, colour: Colour, col: number, length: number, row: number): string {
+  const mid = row * ROW + ROW / 2
+  const [h, opacity] = ch === '━' ? [5, ''] : [2, ' opacity="0.6"']
+  return `<rect x="${n(col * CELL)}" y="${n(mid - h / 2)}" width="${n(length * CELL)}" height="${h}"${opacity} class="f-${colour}"/>`
+}
+
 /** A line of pieces from a cell on: bars and blocks as shapes, the rest as text. */
 function line(pieces: Piece[], col: number, row: number): string {
   let at = col
@@ -63,8 +71,10 @@ function line(pieces: Piece[], col: number, row: number): string {
   for (const piece of pieces) {
     if (piece.style === 'bar' || piece.style === 'barEmpty') {
       const colour = colourOf(piece)
-      let i = 0
-      for (const ch of piece.text) out += shape(ch, colour, at + i++, row) ?? text({ ...piece, text: ch }, at + i - 1, row)
+      const chars = [...piece.text]
+      // A run of timeline cells is one stretch, so a wide lane stays a single shape.
+      if (chars.every(ch => ch === chars[0]) && (chars[0] === '━' || chars[0] === '·')) out += stretch(chars[0], colour, at, chars.length, row)
+      else chars.forEach((ch, i) => { out += shape(ch, colour, at + i, row) ?? text({ ...piece, text: ch }, at + i, row) })
     } else out += text(piece, at, row)
     at += cells(piece.text)
   }
@@ -78,8 +88,8 @@ function plate(card: Card, columns: number, row: number): string {
   const y0 = row * ROW + ROW / 2
   const y1 = (row + card.lines.length + 1) * ROW + ROW / 2
   const r = RADIUS
-  const title: Piece = { text: ` ${card.title} `, style: 'title', tone: card.tone }
   const count = card.count !== undefined ? `${card.count} ` : ''
+  const title: Piece = { text: ` ${cut(card.title, Math.max(1, columns - 6 - cells(count)))} `, style: 'title', tone: card.tone }
   const titleEnd = 2 + cells(title.text) + cells(count)
   const asideCells = card.aside.reduce((sum, piece) => sum + cells(piece.text), 0)
   const asideStart = card.aside.length && titleEnd + asideCells + 4 <= columns ? columns - 2 - asideCells : null
