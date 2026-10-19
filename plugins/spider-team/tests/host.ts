@@ -9,7 +9,7 @@ export type Tool = { name: string; description: string; inputSchema: { propertie
 export const NOW = Date.parse('2026-10-18T12:00:00Z')
 
 /** The MCP name the host gives a tool this plugin registers. */
-export const id = (name: string) => `mcp__spider-progress__${name}`
+export const id = (name: string) => `mcp__spider-team__${name}`
 
 /** What draws beneath this plugin's band: another plugin's tree. */
 export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['beneath'] }
@@ -24,7 +24,7 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   const tools: Tool[] = []
   const logs: string[] = []
   const context = { window: 500_000 }
-  const stored: { [K in keyof PluginState['spider-progress']]?: PluginState['spider-progress'][K] } = {}
+  const stored: { [K in keyof PluginState['spider-team']]?: PluginState['spider-team'][K] } = {}
   const opened: string[] = []
   const prompts: string[] = []
   let spawns = 0
@@ -42,7 +42,7 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   on('ui.panes', () => ({ value: opened.map(pane => ({ id: pane, title: 'Spider agents' })) }) as never)
   on('state.set', async (_$, e, next) => {
     const result = await next(e)
-    if ((result as unknown as { value?: { isSet?: boolean } }).value?.isSet && e.plugin === 'spider-progress') (stored as Record<string, unknown>)[e.key] = e.value
+    if ((result as unknown as { value?: { isSet?: boolean } }).value?.isSet && e.plugin === 'spider-team') (stored as Record<string, unknown>)[e.key] = e.value
     return result
   })
   on('ui.log', (_$, e) => (logs.push(e.text), { value: undefined }))
@@ -75,12 +75,12 @@ export async function started($: Engine, tools: Tool[]): Promise<string[]> {
 }
 
 export const band = (columns = 60) => ({
-  plugin: 'spider-progress', component: 'AbovePrompt', surface: 'terminal',
+  plugin: 'spider-team', component: 'AbovePrompt', surface: 'terminal',
   props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: columns, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }) as never
 
 export const pane = (columns = 100) => ({
-  plugin: 'spider-progress', component: 'Pane', surface: 'terminal', requestId: 'spider-agents',
+  plugin: 'spider-team', component: 'Pane', surface: 'terminal', requestId: 'spider-agents',
   props: { title: 'Spider agents', isFocused: true, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 }) as never
 

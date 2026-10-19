@@ -18,7 +18,7 @@ test('progress from a subagent is refused; step from the main session is refused
   const { tools } = world(on)
   await started($, tools)
   expect(await call($, 'progress', PLAN, 'agent-9')).toBe('refused: only the main session reports the run')
-  expect(((await $.tool.call({ tool: 'mcp__spider-progress__progress', ...PLAN, agentId: '' } as never)) as { result?: string }).result).toBe('refused: only the main session reports the run')
+  expect(((await $.tool.call({ tool: 'mcp__spider-team__progress', ...PLAN, agentId: '' } as never)) as { result?: string }).result).toBe('refused: only the main session reports the run')
   expect(await call($, 'step', { done: 1, total: 2 })).toBe('refused: only a subagent reports steps; Main reports with progress')
 })
 
@@ -242,8 +242,8 @@ test('an exception inside a tool returns text', async ($, on) => {
   broken.clock = true
   expect(await call($, 'progress', PLAN)).toBe('error: the run could not be updated; go on with the work')
   expect(await call($, 'step', { done: 1, total: 2 }, 'agent-1')).toBe('error: the step could not be recorded; go on with the work')
-  expect(logs).toContain('spider-progress: progress failed: no implementation for clock.now')
-  expect(logs).toContain('spider-progress: step failed: no implementation for clock.now')
+  expect(logs).toContain('spider-team: progress failed: no implementation for clock.now')
+  expect(logs).toContain('spider-team: step failed: no implementation for clock.now')
 })
 
 test('an agent starts when its spawn is asked, not when the host answers it', async ($, on) => {
@@ -386,7 +386,7 @@ test('session end for another reason stops the clock', async ($, on) => {
 test('invalid options are named in one debug line', { options: { historyLimit: 5 } }, async ($, on) => {
   const { tools, logs } = world(on)
   await started($, tools)
-  expect(logs).toContain('spider-progress: invalid options fall back to defaults: historyLimit')
+  expect(logs).toContain('spider-team: invalid options fall back to defaults: historyLimit')
 })
 
 test('a failed observation logs its error and leaves the answer as the host gave it', async ($, on) => {
@@ -396,7 +396,7 @@ test('a failed observation logs its error and leaves the answer as the host gave
   broken.clock = true
   expect((await spawn($, 'Find the router.', 'Explore')).agentId).toBe('agent-1')
   await flush()
-  expect(logs).toContain('spider-progress: observation failed: no implementation for clock.now')
+  expect(logs).toContain('spider-team: observation failed: no implementation for clock.now')
 })
 
 test('a spawn hook that throws logs why and still lets the spawn through', async ($, on) => {
@@ -404,7 +404,7 @@ test('a spawn hook that throws logs why and still lets the spawn through', async
   await started($, tools)
   const result = await $.agent.spawn({ prompt: 42, subagentType: 'spider-team:spider-worker', description: 'Bad' } as never) as { agentId?: string }
   expect(result.agentId).toBe('agent-1')
-  expect(logs.some(line => line.startsWith('spider-progress: spawn hook failed:'))).toBe(true)
+  expect(logs.some(line => line.startsWith('spider-team: spawn hook failed:'))).toBe(true)
 })
 
 test('a pane that cannot be drawn logs why and draws one line instead of failing', async ($, on) => {
@@ -412,6 +412,6 @@ test('a pane that cannot be drawn logs why and draws one line instead of failing
   await started($, tools)
   const ui = await $.ui.mount(pane())
   expect(await drawn(ui)).toBe('N/A')
-  expect(logs).toContain('spider-progress: pane render failed: no implementation for clock.now')
+  expect(logs).toContain('spider-team: pane render failed: no implementation for clock.now')
   await ui.unmount()
 })
