@@ -19,7 +19,7 @@ type Dollar = Parameters<Hook<'session.start'>>[0]
 const runAtom = atom({ plugin: 'spider-team', key: 'run' } as const, null as SpiderRun | null)
 const agentsAtom = atom({ plugin: 'spider-team', key: 'agents' } as const, [] as SpiderAgent[])
 const mainAtom = atom({ plugin: 'spider-team', key: 'main' } as const, { usage: ZERO } as SpiderMain)
-const panelAtom = atom({ plugin: 'spider-team', key: 'panel' } as const, { open: false, compact: false } as SpiderPanel)
+const panelAtom = atom({ plugin: 'spider-team', key: 'panel' } as const, { open: false } as SpiderPanel)
 const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0)
 
 const PANE = 'spider-agents'
@@ -67,14 +67,14 @@ type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Time
 const EARLY_MAX = 20
 
 /** Theme keys only, so the band and the pane follow the person's Claude Code theme. */
-const PAINT: Record<Style, { color?: string; bold?: boolean; dimColor?: boolean }> = {
+const PAINT: Record<Style, { color?: string; weight?: 'bold'; dimColor?: boolean }> = {
   plain: {},
-  title: { bold: true },
+  title: { weight: 'bold' },
   dim: { dimColor: true },
   accent: { color: 'claude' },
   ok: { color: 'success' },
   warn: { color: 'warning' },
-  error: { color: 'error', bold: true },
+  error: { color: 'error', weight: 'bold' },
   bar: { color: 'claude' },
   barEmpty: { color: 'subtle' },
 }
@@ -133,7 +133,7 @@ async function reset($: Dollar, held: Held): Promise<void> {
   await update($, runAtom, () => null)
   await update($, agentsAtom, () => [])
   await update($, mainAtom, () => ({ usage: ZERO }))
-  await update($, panelAtom, () => ({ open: false, compact: held.config.compactMode }))
+  await update($, panelAtom, () => ({ open: false }))
 }
 
 /** An agent's turn ended: its row ends, and a worker's task moves as its ending says. */
@@ -334,7 +334,7 @@ export const register: Register = (on, options) => {
       const line = bandLine({ run, running: active.length, agents: ours.length, ...(lastTool ? { lastTool } : {}), columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
       const dismiss = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, dismissedRunId: run.runId })) })
       const drawn = <Box flexDirection="row" width={e.props.bodyColumns}>
-        <Text key="band" wrap="truncate-end">{line.map((piece, i) => <Text key={`band-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>)}</Text>
+        <Text key="band" mono wrap="truncate-end">{line.map((piece, i) => <Text key={`band-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>)}</Text>
         <Box flexGrow={1} />
         <Button key="spider-pane" plain label={`×${ours.length}`} onPress={() => void observe($, async () => { await togglePane($, held) })} />
         <Text> </Text>
@@ -350,12 +350,10 @@ export const register: Register = (on, options) => {
   // A failure draws one dim line instead of failing the pane.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     try {
-      const [run, agents, main, panel, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, mainAtom), read($, panelAtom), read($, nowAtom)])
-      const { Box, Text, Button } = $.ui.resolve(e)
-      const s = t(held.lang)
+      const [run, agents, main, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, mainAtom), read($, nowAtom)])
+      const { Box, Text } = $.ui.resolve(e)
       const columns = Math.max(PANE_MIN_COLUMNS, e.props.bodyColumns)
-      const model = paneModel({ run, agents, main, config: held.config, compact: panel.compact, columns, lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
-      const flip = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, compact: !current.compact })) })
+      const model = paneModel({ run, agents, main, config: held.config, columns, lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
       // Lines are laid out in cells (padded columns, the plan's tree, the timeline's bars): `mono` keeps them aligned
       // on a surface whose body font is proportional, as the desktop's is; the terminal ignores it.
       const text = (line: Piece[], key: string) => <Text key={key} mono wrap="truncate-end">{line.length ? line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>
@@ -363,17 +361,13 @@ export const register: Register = (on, options) => {
         {text(model.header, 'header')}
         {model.sections.map(section => <Box key={`section-${section.key}`} flexDirection="column" borderStyle="round" borderColor={section.border} paddingX={1} width={columns}>
           <Box key={`title-${section.key}`} flexDirection="row" width={columns - FRAME}>
-            <Text key={`name-${section.key}`} wrap="truncate-end" bold color={section.border === 'subtle' || section.border === 'inactive' ? 'inactive' : section.border}>{section.title}</Text>
+            <Text key={`name-${section.key}`} mono wrap="truncate-end" weight="bold" {...(section.border === 'subtle' || section.border === 'inactive' ? { dimColor: true } : { color: section.border })}>{section.title}</Text>
             <Box flexGrow={1} />
             {text(section.aside, `aside-${section.key}`)}
           </Box>
           {section.lines.map((line, i) => text(line, `${section.key}-${i}`))}
         </Box>)}
-        <Box key="footer" flexDirection="row" width={columns}>
-          {text(model.footer, 'footer')}
-          <Box flexGrow={1} />
-          <Button key="spider-compact" plain hotkey="c" label={panel.compact ? s.pane.expanded : s.pane.compact} onPress={flip} />
-        </Box>
+        {text(model.footer, 'footer')}
       </Box>
     } catch (error) {
       debug($, 'spider-team: pane render failed', error)

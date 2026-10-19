@@ -17,7 +17,7 @@ const WORKER: SpiderAgent = {
 const EXPLORE: SpiderAgent = { agentId: 'a2', type: 'Explore', status: 'done', startedAt: 0, endedAt: 61_000, lastUpdate: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, requests: 0 }
 const MAIN: SpiderMain = { model: 'claude-opus-5-5', usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0 }, costUsd: 1, contextTokens: 200_000, contextWindow: 500_000 }
 const all = (lines: Piece[][]) => lines.map(l => l.map(p => p.text).join('')).join('\n')
-const view = (over: Partial<Parameters<typeof paneLines>[0]> = {}) => ({ run: RUN, agents: [WORKER, EXPLORE], main: MAIN, config: DEFAULTS, compact: false, columns: 110, lang: 'en' as const, now: 272_000, frame: 0, ...over })
+const view = (over: Partial<Parameters<typeof paneLines>[0]> = {}) => ({ run: RUN, agents: [WORKER, EXPLORE], main: MAIN, config: DEFAULTS, columns: 110, lang: 'en' as const, now: 272_000, frame: 0, ...over })
 const draw = (over: Partial<Parameters<typeof paneLines>[0]> = {}) => paneLines(view(over))
 const section = (key: string, over: Partial<Parameters<typeof paneLines>[0]> = {}) => paneModel(view(over)).sections.find(s => s.key === key)
 
@@ -70,15 +70,6 @@ test('a narrow pane puts an agent figures on a second line and every line fits',
   expect(all([lines[1]!])).toContain('ctx ')
   for (const line of draw({ columns: 60 }).map(l => l.map(p => p.text).join(''))) expect([...line].length).toBeLessThanOrEqual(60)
   for (const s of paneModel(view({ columns: 60 })).sections) for (const line of s.lines) expect([...all([line])].length).toBeLessThanOrEqual(60 - FRAME)
-})
-
-test('compact mode keeps the plan counts and one line per agent, without activity, timeline or totals', () => {
-  const model = paneModel(view({ compact: true }))
-  expect(model.sections.map(s => s.key)).toEqual(['plan', 'running', 'recent'])
-  expect(model.sections[0]!.lines).toEqual([])
-  expect(all(model.sections[0]!.aside.length ? [model.sections[0]!.aside] : [])).toBe('0 accepted / 1 running / 0 left')
-  expect(model.sections[1]!.lines.length).toBe(1)
-  expect(all(model.sections[1]!.lines)).not.toContain('182.9K')
 })
 
 test('options hide cost, tokens and context, and the totals with all three', () => {

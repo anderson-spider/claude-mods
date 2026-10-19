@@ -11,7 +11,6 @@ export type SpiderConfig = {
   showTokens: boolean
   showContext: boolean
   animations: boolean
-  compactMode: boolean
   historyLimit: number
 }
 
@@ -22,7 +21,6 @@ export const DEFAULTS: SpiderConfig = {
   showTokens: true,
   showContext: true,
   animations: true,
-  compactMode: false,
   historyLimit: 200,
 }
 
@@ -38,7 +36,6 @@ const CHECKS: { [K in keyof SpiderConfig]: (v: unknown) => boolean } = {
   showTokens: bool,
   showContext: bool,
   animations: bool,
-  compactMode: bool,
   historyLimit: v => Number.isInteger(v) && (v as number) >= HISTORY_MIN && (v as number) <= HISTORY_MAX,
 }
 

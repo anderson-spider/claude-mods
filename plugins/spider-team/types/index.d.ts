@@ -62,7 +62,7 @@ export type SpiderAgent = {
 
 export type SpiderMain = { model?: string; usage: SpiderUsage; costUsd?: number; costPartial?: true; contextTokens?: number; contextWindow?: number }
 
-export type SpiderPanel = { open: boolean; compact: boolean; dismissedRunId?: string }
+export type SpiderPanel = { open: boolean; dismissedRunId?: string }
 
 declare module 'claude-code' {
   interface PluginState {

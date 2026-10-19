@@ -13,7 +13,7 @@ import { effectiveState, isPlanned } from './state'
 import { SPINNER, bar, cells, cut, fit, modelName, p, pad } from './text'
 import type { Piece, Style } from './text'
 
-export type PaneView = { run: SpiderRun | null; agents: SpiderAgent[]; main: SpiderMain; config: SpiderConfig; compact: boolean; columns: number; lang: Lang; now: number; frame: number }
+export type PaneView = { run: SpiderRun | null; agents: SpiderAgent[]; main: SpiderMain; config: SpiderConfig; columns: number; lang: Lang; now: number; frame: number }
 
 /** Theme keys the renderer gives a section's border and title. */
 export type Border = 'suggestion' | 'success' | 'subtle' | 'merged' | 'inactive'
@@ -102,7 +102,6 @@ function activityLine(a: SpiderAgent, s: Strings): Piece[] | null {
 function runningRows(a: SpiderAgent, v: PaneView, s: Strings, inner: number, cols: Columns): Piece[][] {
   const time = p(pad(formatDuration(v.now - a.startedAt), 7))
   const figs = joined(figures(a, v, s), p('  '))
-  if (v.compact) return [[...identity(a, v, cols, false), time]]
   const wideHead = [...identity(a, v, cols, true), time, ...figs]
   const activity = activityLine(a, s)
   const after = activity ? [activity] : []
@@ -121,7 +120,7 @@ function finishedRow(a: SpiderAgent, v: PaneView, s: Strings, inner: number, col
   const duration = p(pad(formatDuration(ended - a.startedAt), 7))
   const tail = [...(a.endReason ? [p(a.endReason, 'error'), p('  ')] : []), p(ago(v.now - ended, s), 'dim')]
   const base = [...identity(a, v, cols, true), duration, ...tail]
-  if (v.compact || width(base) > inner) return [...identity(a, v, cols, false), duration, ...tail]
+  if (width(base) > inner) return [...identity(a, v, cols, false), duration, ...tail]
   const figs = figures(a, v, s)
   return figs.length ? [...base, p('  '), ...joined(figs, p('  '))] : base
 }
@@ -173,7 +172,7 @@ function planLines(run: SpiderRun, v: PaneView, s: Strings, inner: number): Piec
     const under = lead + (branch ? (last ? '   ' : '│  ') : '')
     const detail = task.state === 'completed' ? task.evidence : task.errors.at(-1)
     const kids = children(task.id)
-    if (detail && !v.compact) lines.push([p(`${under}${kids.length ? '│ ' : '  '} `, 'dim'), p(detail, task.state === 'completed' ? 'dim' : 'error')])
+    if (detail) lines.push([p(`${under}${kids.length ? '│ ' : '  '} `, 'dim'), p(detail, task.state === 'completed' ? 'dim' : 'error')])
     kids.forEach((kid, i) => walk(kid, under, i === kids.length - 1 ? '└─ ' : '├─ ', i === kids.length - 1))
   }
   for (const root of children(undefined)) walk(root, '', '', true)
@@ -250,7 +249,7 @@ export function paneModel(v: PaneView): PaneModel {
   const others = v.run ? v.agents.filter(a => !ours.includes(a)) : []
   const cols = columnsOf(v.agents)
   const sections: Section[] = []
-  if (v.run) sections.push({ key: 'plan', border: 'suggestion', title: s.pane.plan, aside: planCounts(v.run, v.lang), lines: v.compact ? [] : planLines(v.run, v, s, inner) })
+  if (v.run) sections.push({ key: 'plan', border: 'suggestion', title: s.pane.plan, aside: planCounts(v.run, v.lang), lines: planLines(v.run, v, s, inner) })
   const running = ours.filter(a => a.status === 'running')
   const finished = latestEnded(ours.filter(a => a.status !== 'running'))
   if (running.length || (!ours.length && !others.length)) {
@@ -264,11 +263,9 @@ export function paneModel(v: PaneView): PaneModel {
     const order = [...others.filter(a => a.status === 'running'), ...latestEnded(others.filter(a => a.status !== 'running'))]
     sections.push({ key: 'others', border: 'inactive', title: `${s.pane.others} · ${others.length}`, aside: [], lines: listed(order, s, a => finishedRow(a, v, s, inner, cols)) })
   }
-  if (!v.compact) {
-    const timeline = timelineLines([...ours, ...others], v, s, inner)
-    if (timeline.length) sections.push({ key: 'timeline', border: 'merged', title: s.pane.timeline, aside: [], lines: timeline })
-    if (v.config.showTokens || v.config.showCost || v.config.showContext) sections.push({ key: 'totals', border: 'subtle', title: s.pane.totals, aside: [], lines: totalsLines(v, s) })
-  }
+  const timeline = timelineLines([...ours, ...others], v, s, inner)
+  if (timeline.length) sections.push({ key: 'timeline', border: 'merged', title: s.pane.timeline, aside: [], lines: timeline })
+  if (v.config.showTokens || v.config.showCost || v.config.showContext) sections.push({ key: 'totals', border: 'subtle', title: s.pane.totals, aside: [], lines: totalsLines(v, s) })
   const fitted = sections.map(section => ({ ...section, aside: fit(section.aside, Math.max(0, inner - cells(section.title) - 2)), lines: section.lines.map(line => fit(line, inner)) }))
   const count = v.agents.length
   return { header: headerOf(v, s, ours), sections: fitted, footer: [p(`${count} ${count === 1 ? s.agent : s.agents}`, 'dim')] }

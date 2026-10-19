@@ -1,6 +1,6 @@
 {
   "name": "spider-team",
-  "version": "0.17.2",
+  "version": "0.18.0",
   "description": "/spider-team: the session implements the task, calls a planner, researcher or reviewer when they help, splits off parallel workers only when that pays, and shows the run in a progress band and an agents pane",
   "author": {
     "name": "anderson-spider"
@@ -124,12 +124,6 @@
       "title": "Animations",
       "description": "A spinner beside running agents; off keeps a fixed mark.",
       "default": true
-    },
-    "compactMode": {
-      "type": "boolean",
-      "title": "Compact pane",
-      "description": "Start the pane with one line per agent ('c' in the pane toggles it).",
-      "default": false
     },
     "historyLimit": {
       "type": "number",
