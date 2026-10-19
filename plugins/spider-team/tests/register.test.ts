@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
+import { refusal } from '../hooks/git-guard'
 import { STEP_BRIEF } from '../hooks/tiers'
 import { NOW, band, call, drawn, flush, pane, started, step, world } from './host'
 
@@ -62,6 +63,49 @@ test("a subagent's tool calls are its activity, failures counted; Main's calls a
   await call($, 'step', { done: 1, total: 2 }, agentId)
   await flush()
   expect(stored.agents?.[0]?.activity).toEqual({ tools: ['Read', 'Bash'], calls: 2, errors: 1 })
+})
+
+test("a spider-team agent's Git write is refused before it runs; its reads, Main's writes and other agents' pass", async ($, on) => {
+  const { tools, stored } = world(on)
+  const ran: string[] = []
+  on('tool.call', { tool: 'Bash' }, (_$, e) => { ran.push((e as { command: string }).command); return { result: 'ok' } as never })
+  await started($, tools)
+  const { agentId: worker } = await spawn($, 'spider-task: T1\nBuild the login form.')
+  const { agentId: explorer } = await spawn($, 'Find the router.', 'Explore')
+  await flush()
+  const bash = (command: string, agentId?: string) => $.tool.call({ tool: 'Bash', command, ...(agentId ? { agentId } : {}) } as never) as Promise<{ deny?: string; result?: string }>
+  expect((await bash('npm test && git commit -m wip', worker)).deny).toBe(refusal('git commit'))
+  expect((await bash('git status', worker)).result).toBe('ok')
+  expect((await bash('git commit -m wip')).result).toBe('ok')
+  expect((await bash('git commit -m wip', explorer)).result).toBe('ok')
+  expect(ran).toEqual(['git status', 'git commit -m wip', 'git commit -m wip'])
+  await flush()
+  expect(stored.agents?.find(a => a.agentId === worker)?.activity).toEqual({ tools: ['Bash', 'Bash'], calls: 2, errors: 1 })
+})
+
+test("when the agent's role cannot be looked up, a subagent's Git write is refused and its reads still run", async ($, on) => {
+  const broken: { list?: boolean } = {}
+  const { tools } = world(on, { broken })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }) as never)
+  await started($, tools)
+  const { agentId } = await spawn($, 'Find the router.', 'Explore')
+  await flush()
+  await run($, 'clear')
+  broken.list = true
+  const bash = (command: string) => $.tool.call({ tool: 'Bash', command, agentId } as never) as Promise<{ deny?: string; result?: string }>
+  expect((await bash('git commit -m x')).deny).toBe(refusal('git commit'))
+  expect((await bash('git status')).result).toBe('ok')
+})
+
+test("a spider-team agent the plugin no longer tracks is found in the host's list, and its Git write is still refused", async ($, on) => {
+  const { tools } = world(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }) as never)
+  await started($, tools)
+  const { agentId } = await spawn($, 'spider-task: T1\nBuild the login form.')
+  await flush()
+  await run($, 'clear')
+  const reply = (await $.tool.call({ tool: 'Bash', command: 'git push', agentId } as never)) as { deny?: string }
+  expect(reply.deny).toBe(refusal('git push'))
 })
 
 test('the plugin draws no band above the prompt, with or without a run', async ($, on) => {

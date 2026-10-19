@@ -16,12 +16,12 @@ export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['ben
 
 /**
  * A host recording tools, panes, spawned prompts and debug logs; a spawn starts `agent-1`, `agent-2`... on the model it names,
- * and a resume keeps its id. `broken.clock` makes the clock throw and `broken.settings` the settings read; `spawnTakes` is how
+ * and a resume keeps its id. `broken.clock` makes the clock throw, `broken.settings` the settings read and `broken.list` the agent list, each read at the call; `spawnTakes` is how
  * long the host takes to answer a spawn on the mock clock; `answeredBy` is the model a step's usage names; `context.window` is
  * the window the host measures; `stored` holds the plugin's state as last written; `listed` is what `$.agent.list()` answers,
  * each spawn added running; `session` is the session's id; `disk` is the plugin's store.
  */
-export function world(on: On, opts: { language?: string; env?: Record<string, string>; broken?: { clock?: boolean; settings?: boolean }; spawnTakes?: number; answeredBy?: string } = {}) {
+export function world(on: On, opts: { language?: string; env?: Record<string, string>; broken?: { clock?: boolean; settings?: boolean; list?: boolean }; spawnTakes?: number; answeredBy?: string } = {}) {
   const tools: Tool[] = []
   const logs: string[] = []
   const context = { window: 500_000 }
@@ -29,7 +29,7 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   const opened: string[] = []
   const prompts: string[] = []
   let spawns = 0
-  const listed: { id: string; status: string }[] = []
+  const listed: { id: string; status: string; type?: string }[] = []
   const session = { id: 's1' }
   const disk = new Map<string, unknown>()
   const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On)
@@ -61,7 +61,7 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
     prompts.push(e.prompt)
     if (opts.spawnTakes) await clock.sleep(opts.spawnTakes)
     const agentId = e.resume?.agentId ?? `agent-${++spawns}`
-    if (!listed.some(agent => agent.id === agentId)) listed.push({ id: agentId, status: 'running' })
+    if (!listed.some(agent => agent.id === agentId)) listed.push({ id: agentId, status: 'running', ...(e.subagentType ? { type: e.subagentType } : {}) })
     return { model: e.model ?? 'claude-sonnet-5-5', agentId }
   })
   on('turn.step', async function* (_$, e) {
@@ -69,7 +69,7 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
   })
   on('turn.complete', () => ({ text: 'done' }) as never)
-  on('agent.list', () => ({ value: listed }) as never)
+  on('agent.list', () => { if (opts.broken?.list) throw new Error('agent list failed'); return { value: listed } as never })
   on('session.id', () => ({ value: session.id }) as never)
   on('store.get', (_$, e) => ({ value: disk.get(e.key) }) as never)
   on('store.set', (_$, e) => (disk.set(e.key, JSON.parse(JSON.stringify(e.value))), { value: undefined }) as never)
