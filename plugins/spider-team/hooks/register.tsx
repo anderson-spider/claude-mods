@@ -14,7 +14,8 @@ import { applyProgress, bindWorker, isOver, workerEnded } from './state'
 import type { Piece, Style } from './text'
 import { STATE_SHAPE, pruned, restorable, savedKey, toSave } from './saved'
 import { svgOf } from './svg'
-import { briefed, taskIdOf } from './tiers'
+import { refusedIn, refusal } from './git-guard'
+import { briefed, taskIdOf, tierOf } from './tiers'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
@@ -318,6 +319,24 @@ export const register: Register = (on, options) => {
       })
     }
     return result
+  })
+
+  // Only Main changes Git state or publishes: a spider-team agent's Bash call that names git, gh or glab outside their
+  // read-only forms is refused before it runs. Main's calls and other agents' pass through. The agent's type comes from
+  // the spawn this plugin tracked, else from the host's list. A guard that throws would let the tool run, so when the
+  // lookup fails any subagent's call is checked the same way.
+  const refusalOf = (e: { agentId?: string; command?: unknown }) => e.agentId !== undefined ? refusedIn(String(e.command ?? '')) : undefined
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const agentId = (e as { agentId?: string }).agentId
+    const write = refusalOf(e as { agentId?: string; command?: unknown })
+    if (agentId === undefined || write === undefined) return next(e)
+    const tracked = (await read($, agentsAtom)).find(agent => agent.agentId === agentId)?.type
+    const type = tracked ?? (await $.agent.list()).find(agent => agent.id === agentId)?.type
+    return tierOf(type) ? { deny: refusal(write) } : next(e)
+  }).catch(($, e, next) => {
+    if (next.called) return next(e)
+    const write = refusalOf(e as { agentId?: string; command?: unknown })
+    return write !== undefined ? { deny: refusal(write) } : next(e)
   })
 
   // A spider-team worker's brief gets the step request appended; every spawned agent is tracked, and one whose brief
