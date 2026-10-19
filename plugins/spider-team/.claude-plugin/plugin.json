@@ -1,6 +1,6 @@
 {
   "name": "spider-team",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "/spider-team:execute: the session implements the task, calls a planner, researcher or reviewer when they help, splits off parallel workers only when that pays, and shows the run in an agents pane",
   "author": {
     "name": "anderson-spider"
