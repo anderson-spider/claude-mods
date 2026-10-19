@@ -79,7 +79,7 @@ spider-progress, the plugin that drew them before, is part of spider-team now. I
 
 ## Privacy
 
-The skill and agents are prompts: they send nothing anywhere themselves. Briefs go to the subagents the session starts, as any delegation does. The pane sends nothing. Its agents and usage live in the session's memory and are cleared when it ends; the open run (its title, phase, task titles, criteria, evidence and errors) is also saved in the plugin's store under your Claude Code configuration directory, one entry per session, removed when the run closes or after 7 days, at most 20 sessions; `/spider-agents clear` removes this session's. It shows the run's title, which the session writes, task titles, agent types, step notes and tool names, never prompts, tool inputs or answers.
+The skill and agents are prompts: they send nothing anywhere themselves. Briefs go to the subagents the session starts, as any delegation does. The pane sends nothing. Its agents and usage live in the session's memory and are cleared when it ends; the open run (its title, phase, task titles, criteria, evidence, errors and the ids of the agents on its tasks) is also saved in the plugin's store under your Claude Code configuration directory, one entry per session, removed when the run closes or after 7 days, at most 20 sessions; `/spider-agents clear` removes this session's. It shows the run's title, which the session writes, task titles, agent types, step notes and tool names, never prompts, tool inputs or answers.
 
 ## Tests
 

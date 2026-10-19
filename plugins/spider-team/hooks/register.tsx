@@ -12,19 +12,19 @@ import { TIMELINE_MS, paneModel } from './pane'
 import { allOf, type SchemaFor } from './schema'
 import { applyProgress, bindWorker, isOver, workerEnded } from './state'
 import type { Piece, Style } from './text'
-import { pruned, restorable, savedKey, toSave } from './saved'
+import { STATE_SHAPE, pruned, restorable, savedKey, toSave } from './saved'
 import { svgOf } from './svg'
 import { briefed, taskIdOf } from './tiers'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
-/** The state's shape: change it whenever a stored type changes, so a reload drops what the older code wrote. */
-const STATE_SHAPE = { shape: 'spider-team/1' }
-const runAtom = atom({ plugin: 'spider-team', key: 'run' } as const, null as SpiderRun | null, STATE_SHAPE)
-const agentsAtom = atom({ plugin: 'spider-team', key: 'agents' } as const, [] as SpiderAgent[], STATE_SHAPE)
-const mainAtom = atom({ plugin: 'spider-team', key: 'main' } as const, { usage: ZERO } as SpiderMain, STATE_SHAPE)
-const panelAtom = atom({ plugin: 'spider-team', key: 'panel' } as const, { open: false } as SpiderPanel, STATE_SHAPE)
-const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0, STATE_SHAPE)
+/** A reload whose code names another shape (hooks/saved.ts) drops what the older code wrote. */
+const SHAPED = { shape: STATE_SHAPE }
+const runAtom = atom({ plugin: 'spider-team', key: 'run' } as const, null as SpiderRun | null, SHAPED)
+const agentsAtom = atom({ plugin: 'spider-team', key: 'agents' } as const, [] as SpiderAgent[], SHAPED)
+const mainAtom = atom({ plugin: 'spider-team', key: 'main' } as const, { usage: ZERO } as SpiderMain, SHAPED)
+const panelAtom = atom({ plugin: 'spider-team', key: 'panel' } as const, { open: false } as SpiderPanel, SHAPED)
+const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0, SHAPED)
 
 const PANE = 'spider-agents'
 /** The narrowest pane the layout is drawn for; a narrower one truncates it. */
@@ -67,7 +67,7 @@ const TASK_SCHEMA = {
 type Ending = { reason: string; now: number; usage?: unknown }
 
 /** What the module keeps between events: the options, the language, the clock's timer and endings heard before their spawn. */
-type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending>; restoredFor?: string }
+type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending>; restoredFor?: string; saving: Promise<void> }
 
 /** Engine forks end without a spawn too, so only the latest few endings wait for one. */
 const EARLY_MAX = 20
@@ -138,12 +138,19 @@ function ensureTicker($: Dollar, held: Held): void {
   }))
 }
 
-/** The open run written to the store under this session, or its entry removed once the run closes or goes. */
-async function saveRun($: Dollar): Promise<void> {
-  const [id, run, now] = await Promise.all([$.session.id(), read($, runAtom), $.clock.now()])
-  const saved = toSave(run, now)
-  if (saved) await $.store.set(savedKey(id), saved)
-  else await $.store.delete(savedKey(id))
+/**
+ * The open run written to the store under this session, or its entry removed once the run closes or goes. Saves run one
+ * after another, each reading the run when its turn comes, so a slow one never writes back a run a later change closed.
+ */
+function saveRun($: Dollar, held: Held): Promise<void> {
+  const save = async () => {
+    const [id, run, now] = await Promise.all([$.session.id(), read($, runAtom), $.clock.now()])
+    const saved = toSave(run, now)
+    if (saved) await $.store.set(savedKey(id), saved)
+    else await $.store.delete(savedKey(id))
+  }
+  held.saving = held.saving.then(save, save)
+  return held.saving
 }
 
 /**
@@ -153,14 +160,16 @@ async function saveRun($: Dollar): Promise<void> {
 async function restoreRun($: Dollar, held: Held): Promise<void> {
   const id = await $.session.id()
   if (held.restoredFor === id) return
-  held.restoredFor = id
+  const now = await $.clock.now()
   if (!(await read($, runAtom))) {
-    const run = restorable(await $.store.get(savedKey(id)))
+    const run = restorable(await $.store.get(savedKey(id)), now)
     if (run) await update($, runAtom, current => current ?? run)
   }
+  // Marked once read, so a failed read is tried again on the next chance.
+  held.restoredFor = id
   const keys = await $.store.keys()
   const entries = await Promise.all(keys.map(async key => [key, await $.store.get(key)] as [string, unknown]))
-  for (const key of pruned(entries, await $.clock.now())) await $.store.delete(key)
+  for (const key of pruned(entries, now)) await $.store.delete(key)
 }
 
 /** `/spider-agents clear`: the run, the agents and Main's usage and turns forgotten, and this session's saved run removed. */
@@ -171,7 +180,7 @@ async function clearAll($: Dollar, held: Held): Promise<string> {
   await update($, runAtom, () => null)
   await update($, agentsAtom, () => [])
   await update($, mainAtom, () => ({ usage: ZERO }))
-  await $.store.delete(savedKey(id))
+  await saveRun($, held)
   return t(held.lang).command.cleared
 }
 
@@ -185,17 +194,17 @@ async function reset($: Dollar, held: Held): Promise<void> {
 }
 
 /** An agent's turn ended: its row ends, and a worker's task moves as its ending says. */
-async function endAgent($: Dollar, agentId: string, ending: Ending): Promise<void> {
+async function endAgent($: Dollar, held: Held, agentId: string, ending: Ending): Promise<void> {
   await update($, agentsAtom, list => agentEnded(list, agentId, ending.reason, ending.now, ending.usage))
   const taskId = (await read($, agentsAtom)).find(agent => agent.agentId === agentId)?.taskId
   if (taskId) {
     await update($, runAtom, run => (run && !isOver(run) ? workerEnded(run, taskId, agentId, ending.reason === 'answer', `the worker ended: ${ending.reason}`) : run))
-    await observe($, () => saveRun($))
+    await observe($, () => saveRun($, held))
   }
 }
 
 export const register: Register = (on, options) => {
-  const held: Held = { ...configOf((options ?? {}) as Record<string, unknown>), lang: 'en', early: new Map() }
+  const held: Held = { ...configOf((options ?? {}) as Record<string, unknown>), lang: 'en', early: new Map(), saving: Promise.resolve() }
 
   on('session.start', async ($, e, next) => {
     await $.tool.register({
@@ -236,7 +245,7 @@ export const register: Register = (on, options) => {
     await observe($, () => restoreRun($, held))
     await observe($, async () => {
       const now = await $.clock.now()
-      for (const missed of missedEndings(await read($, agentsAtom), await $.agent.list())) await endAgent($, missed.agentId, { reason: missed.reason, now })
+      for (const missed of missedEndings(await read($, agentsAtom), await $.agent.list())) await endAgent($, held, missed.agentId, { reason: missed.reason, now })
     })
     await observe($, async () => {
       ensureTicker($, held)
@@ -270,7 +279,7 @@ export const register: Register = (on, options) => {
         isNew = !!applied.run && applied.run.runId !== current?.runId
         return applied.run
       })
-      await observe($, () => saveRun($))
+      await observe($, () => saveRun($, held))
       if (isNew && held.config.autoOpen === 'team') await observe($, async () => { await openPane($, held, false) })
       return { result: text }
     } catch (error) {
@@ -331,11 +340,11 @@ export const register: Register = (on, options) => {
       const taskId = taskIdOf(e.prompt)
       if (taskId) {
         await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))
-        await observe($, () => saveRun($))
+        await observe($, () => saveRun($, held))
       }
       const early = held.early.get(agentId)
       // An ending heard before this start belongs to an earlier turn of the agent.
-      if (early) { held.early.delete(agentId); if (early.now >= now) await endAgent($, agentId, early) }
+      if (early) { held.early.delete(agentId); if (early.now >= now) await endAgent($, held, agentId, early) }
       if (held.config.autoOpen === 'any' && idle) await openPane($, held, false)
     })
     return result
@@ -377,7 +386,7 @@ export const register: Register = (on, options) => {
       }
       const agentId = e.agentId
       const ending: Ending = { reason: e.reason, now: await $.clock.now(), usage: (e as { usage?: unknown }).usage }
-      if ((await read($, agentsAtom)).some(agent => agent.agentId === agentId && agent.status === 'running')) return endAgent($, agentId, ending)
+      if ((await read($, agentsAtom)).some(agent => agent.agentId === agentId && agent.status === 'running')) return endAgent($, held, agentId, ending)
       // The spawn is recorded after the host answers it, so a quick failure can end the agent first, and a resumed agent
       // can end while its row still reads as ended: the spawn's observation applies the ending once the row runs.
       held.early.set(agentId, ending)
