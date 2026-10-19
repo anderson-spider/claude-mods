@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent, SpiderRun } from '../types'
-import { agentEnded, agentStepped, answeredModel, agentsOfRun, capped, resumed, spawned, stepReported } from '../hooks/agents'
+import { TOOLS_KEPT, agentEnded, agentStepped, answeredModel, agentsOfRun, capped, resumed, spawned, stepReported, toolName, toolUsed } from '../hooks/agents'
 import { STEP_BRIEF, TIERS, briefed, taskIdOf, tierOf } from '../hooks/tiers'
 
 const BRIEF = 'spider-task: T3\nRead the auth module.'
@@ -89,6 +89,7 @@ test('a resumed agent runs again with its usage kept and reports steps again', (
   expect(stepReported([again!], 'a1', { done: 1, total: 2 }, 80).text).toBe('ok: 1/2')
   expect(resumed(spawn(), 'a1', 70)).toEqual(spawn())
   expect(resumed(ended, 'zz', 70)).toBe(ended)
+  expect(resumed(agentEnded(spawn(), 'a1', 'max_tokens', 50), 'a1', 70)[0]!.endReason).toBeUndefined()
 })
 
 test('usage taken from the turn end leaves the context unknown, since it sums every request of the turn', () => {
@@ -129,4 +130,28 @@ test('the run counts an agent that started exactly when it opened or when it fin
   const list = at('after', 801, at('end', 800, at('start', 100, at('before', 99, []))))
   const run: SpiderRun = { runId: 'r', title: 'Auth', phase: 'complete', startedAt: 100, finishedAt: 800, tasks: [] }
   expect(agentsOfRun(run, list).map(a => a.agentId)).toEqual(['start', 'end'])
+})
+
+test('a running agent keeps its last tools, its call count and its failed calls; an ended or unknown one changes nothing', () => {
+  let list = spawn()
+  for (const [tool, failed] of [['Grep', false], ['Read', true], ['mcp__gitlab__gitlab_mr', false], ['Bash', false]] as const) list = toolUsed(list, 'a1', tool, failed, 20)
+  expect(list[0]!.activity).toEqual({ tools: ['Read', 'gitlab_mr', 'Bash'].slice(-TOOLS_KEPT), calls: 4, errors: 1 })
+  expect(list[0]!.lastUpdate).toBe(20)
+  expect(toolUsed(list, 'zz', 'Read', false, 21)).toBe(list)
+  const ended = agentEnded(list, 'a1', 'answer', 30)
+  expect(toolUsed(ended, 'a1', 'Read', false, 31)).toBe(ended)
+})
+
+test("the plugin's own tools are not activity, and an MCP tool reads by its own name", () => {
+  expect(toolName('mcp__spider-progress__step')).toBeUndefined()
+  expect(toolName('mcp__plugin_context-mode_context-mode__ctx_search')).toBe('ctx_search')
+  expect(toolName('Read')).toBe('Read')
+  const list = spawn()
+  expect(toolUsed(list, 'a1', 'mcp__spider-progress__step', false, 5)).toBe(list)
+})
+
+test('a failed agent keeps why it ended; a done or cancelled one keeps no reason', () => {
+  expect(agentEnded(spawn(), 'a1', 'max_tokens', 9)[0]).toMatchObject({ status: 'failed', endReason: 'max_tokens' })
+  expect(agentEnded(spawn(), 'a1', 'answer', 9)[0]!.endReason).toBeUndefined()
+  expect(agentEnded(spawn(), 'a1', 'aborted', 9)[0]!.endReason).toBeUndefined()
 })
