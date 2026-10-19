@@ -14,6 +14,8 @@ const SHARED_FILES = [
   ['hooks/schema.ts', 'hooks/schema.ts.tmpl'],
   ['tests/schema-types.ts', 'tests/schema-types.ts.tmpl'],
 ]
+// The most words a skills' shared block may hold.
+export const SHARED_BLOCK_WORDS = 1600
 
 const readText = path => readFileSync(path, 'utf8')
 const readJson = path => JSON.parse(readText(path))
@@ -208,7 +210,8 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors, listed = true) 
   }
 
   // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it. Skills of one plugin
-  // may share a block between `<!-- shared: <block> -->` and `<!-- /shared: <block> -->`; every copy must match the first.
+  // may share a block between `<!-- shared: <block> -->` and `<!-- /shared: <block> -->`; every copy must match the first,
+  // and the block stays within SHARED_BLOCK_WORDS, since every skill that copies it loads it on each call.
   const shared = new Map()
   for (const skill of listDir(join(dir, 'skills'), () => true).sort()) {
     const file = `${entry.source}/skills/${skill}/SKILL.md`
@@ -220,6 +223,8 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors, listed = true) 
       const body = new RegExp(`<!-- shared: ${block} -->\\n([\\s\\S]*?)<!-- /shared: ${block} -->`).exec(text)
       if (!body) { fail(`skills/${skill}/SKILL.md opens shared block "${block}" without <!-- /shared: ${block} -->`); continue }
       const first = shared.get(block)
+      const words = body[1].split(/\s+/).filter(Boolean).length
+      if (!first && words > SHARED_BLOCK_WORDS) fail(`skills/${skill}/SKILL.md shared block "${block}" has ${words} words, over ${SHARED_BLOCK_WORDS}: move what not every run needs to a file the skill links`)
       if (!first) shared.set(block, { skill, text: body[1] })
       else if (first.text !== body[1]) fail(`skills/${skill}/SKILL.md shared block "${block}" differs from skills/${first.skill}/SKILL.md (copy it)`)
     }

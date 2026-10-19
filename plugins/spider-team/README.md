@@ -1,6 +1,6 @@
 # spider-team
 
-`/spider-team:execute <task>` makes the session the owner and main implementer of a task: it understands it, plans tasks with dependencies, writes the code itself, calls a planner, researcher or reviewer when they add value, splits off parallel workers only when independent parts gain from it, checks what comes back against the real diff, verifies the integrated result and delivers, while a `/spider-agents` pane shows the run. A delegate only claims it is done; a task counts once the session has reviewed it.
+`/spider-team:brainstorm <task>` makes the session the owner and main implementer of a task: it understands it, plans tasks with dependencies, settles what the plan leaves open with you, and after your go writes the code itself, calls a planner, researcher or reviewer when they add value, splits off parallel workers only when independent parts gain from it, checks what comes back against the real diff, verifies the integrated result and delivers, while a `/spider-agents` pane shows the run. A delegate only claims it is done; a task counts once the session has reviewed it.
 
 ```text
 /plugin install spider-team --marketplace anderson-spider/claude-mods
@@ -9,21 +9,20 @@
 ## Use
 
 ```text
-/spider-team:execute add rate limiting to the public API
+/spider-team:brainstorm add rate limiting to the public API
 ```
 
-The run goes through Understand, Plan, Investigate, Execute, Review, Verify and Complete. The session implements by default: simple, sequential or tightly coupled work stays with it, and a worker gets a task only when it can advance in parallel with other work on files nobody else is changing. No role is a mandatory step except one: before opening a PR or MR, the session always has the reviewer read the whole diff and fixes what it must, and only the session runs Git commands that write or publish, as your current authorization allows.
+The session plans first and executes nothing until you say go. What the plan leaves open comes as rounds of numbered questions, each with a recommended answer that a "yes" accepts; the session looks up facts itself and asks you only for decisions. With nothing open it only asks for the go, and a go in the command itself (`/spider-team:brainstorm <task>, go`) skips that wait. The run goes through Understand, Plan, Investigate, Execute, Review, Verify and Complete. The session implements by default: simple, sequential or tightly coupled work stays with it, and a worker gets a task only when it can advance in parallel with other work on files nobody else is changing. No role is a mandatory step except one: before opening a PR or MR, the session always has the reviewer read the whole diff and fixes what it must, and only the session runs Git commands that write or publish, as your current authorization allows.
 
-The plan cuts the work into slices that can each be verified alone, puts a prefactor first and runs a wide rename or retype as expand, migrate, contract. A bug is fixed only after one command reproduces it, and that command stays as the regression check. The session reads the project's `GLOSSARY.md` and `docs/adr/` when they exist, points briefs at the spec, the plan or a note instead of restating them, and keeps these rules when skills from other plugins are active: no delegate runs a skill that asks you questions or writes Git.
+The plan cuts the work into slices that can each be verified alone, puts a prefactor first and runs a wide rename or retype as expand, migrate, contract. A bug is fixed only after one command reproduces it: the session minimises the repro, ranks hypotheses before instrumenting, proves a forced red is real, keeps the repro as a regression test at a seam that reaches the bug (or reports that none does), redacts secrets in what it shows and removes its tagged debug logs. Workers write tests through the public interface, with mocks only at system boundaries and literal expected values, and the reviewer flags tests that pass by construction. The session reads the project's `GLOSSARY.md` and `docs/adr/` when they exist, updates the glossary when the run changes a term and offers an ADR only for a hard-to-reverse decision, points briefs at the spec, the plan or a note instead of restating them, gives each brief an Out of scope line, and keeps these rules when skills from other plugins are active: no delegate runs a skill that asks you questions or writes Git.
 
 Asked to build a new project from an empty directory, the run starts it: it writes `docs/SPEC.md`, `docs/PLAN.md`, a short `AGENTS.md` and `filemap.md`, and delegates nothing until you approve the spec and the plan. Visual decisions stay with the session, which shows new screens as mockups first and reviews what was built itself; product questions the request leaves open go to you.
 
-Each mode is its own skill:
+The rules every run needs live in the skill; the steps for a case (a bug, a review, a user interface, a new project) live in files beside it that the session reads only when the case comes up and passes to an agent by path, so a call does not load what it does not use.
 
 | Command | What it does |
 | --- | --- |
-| `/spider-team:execute <task>` | One run of the task through the seven phases. |
-| `/spider-team:brainstorm <topic>` | Plans the topic into a backlog and waits. What it leaves open comes as rounds of numbered questions, each with a recommended answer that a "yes" accepts; the session looks up facts itself and asks you only for decisions. Say go to run it. In team mode the backlog joins the list. |
+| `/spider-team:brainstorm <task>` | Plans the task, settles its open decisions with you and runs it after your go. In team mode the backlog joins the list. |
 | `/spider-team:team-on [subject]` | Team mode, to stop retyping the command: every later message that asks for a change becomes tasks appended to one list, executed in order; questions are answered without a task, and an unclear message gets a one-line question. Messages sent while it works join the list. Verify runs each time the list drains. |
 | `/spider-team:team-off` | Closes team mode: finishes or cancels the open tasks as you say, verifies and closes the run. |
 
@@ -32,7 +31,7 @@ Each mode is its own skill:
 | `spider-planner` | Opus 5.5 (`claude-opus-5-5`) | medium | a plan for a complex decision: options, dependencies, acceptance criteria | `Read`, `Grep`, `Glob` |
 | `spider-worker` | Sonnet 5.5 (`claude-sonnet-5-5`) | medium | one bounded implementation task in parallel with other work | every tool but `Agent` |
 | `spider-researcher` | Haiku 5.5 (`claude-haiku-5-5`) | medium | web research, reading code, reading or writing documentation | `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, `Edit` |
-| `spider-reviewer` | Opus 5.5 (`claude-opus-5-5`) | medium | reviewing a change on two separate axes, Spec (what was asked) and Standards (the project's documented rules, plus code smells as optional calls), each finding must-fix or optional with location, evidence and impact | `Read`, `Grep`, `Glob` |
+| `spider-reviewer` | Opus 5.5 (`claude-opus-5-5`) | medium | reviewing a change on two separate axes, Spec (what was asked) and Standards (the project's documented rules, plus code smells with their fix as optional calls), each finding must-fix or optional with location, evidence and impact | `Read`, `Grep`, `Glob` |
 
 Every agent also gets `ToolSearch` and the plugin's `step` tool, through which it reports its progress to the pane. The models are full IDs, so a provider that does not serve them (Bedrock, Vertex, Foundry) fails the call instead of running another model.
 
