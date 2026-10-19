@@ -356,7 +356,9 @@ export const register: Register = (on, options) => {
       const columns = Math.max(PANE_MIN_COLUMNS, e.props.bodyColumns)
       const model = paneModel({ run, agents, main, config: held.config, compact: panel.compact, columns, lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
       const flip = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, compact: !current.compact })) })
-      const text = (line: Piece[], key: string) => <Text key={key} wrap="truncate-end">{line.length ? line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>
+      // Lines are laid out in cells (padded columns, the plan's tree, the timeline's bars): `mono` keeps them aligned
+      // on a surface whose body font is proportional, as the desktop's is; the terminal ignores it.
+      const text = (line: Piece[], key: string) => <Text key={key} mono wrap="truncate-end">{line.length ? line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>
       return <Box flexDirection="column" width={columns} gap={1}>
         {text(model.header, 'header')}
         {model.sections.map(section => <Box key={`section-${section.key}`} flexDirection="column" borderStyle="round" borderColor={section.border} paddingX={1} width={columns}>

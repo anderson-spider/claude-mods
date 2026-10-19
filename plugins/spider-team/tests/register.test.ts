@@ -415,3 +415,15 @@ test('a pane that cannot be drawn logs why and draws one line instead of failing
   expect(logs).toContain('spider-team: pane render failed: no implementation for clock.now')
   await ui.unmount()
 })
+
+test('the pane draws its lines in the monospaced face on the terminal and the desktop, so its columns line up', async ($, on) => {
+  const { tools } = world(on)
+  await started($, tools)
+  await call($, 'progress', PLAN)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(pane(100, surface))
+    const line = await ui.find({ type: 'Text', text: /T1 Build login/ })
+    expect(line?.props.mono).toBe(true)
+    await ui.unmount()
+  }
+})
