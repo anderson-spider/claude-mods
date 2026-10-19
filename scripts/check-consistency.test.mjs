@@ -355,6 +355,33 @@ const skillsOnly = (files) => {
   delete files["plugins/alpha/tsconfig.json"];
 };
 
+const sharedSkills = (beta) => (files) => {
+  const block = (body) => `<!-- shared: core -->\n${body}<!-- /shared: core -->\n`;
+  files["plugins/alpha/skills/s/SKILL.md"] += block("Same rules.\n");
+  files["plugins/alpha/skills/t/SKILL.md"] = "---\nname: t\ndescription: Another skill.\n---\nIntro\n" + beta(block);
+};
+
+test("skills whose shared blocks are identical copies pass", (t) => {
+  assert.deepEqual(problems(t, sharedSkills((block) => block("Same rules.\n"))), []);
+});
+
+for (const { name, beta, expected } of [
+  {
+    name: "a shared block that differs from the first copy",
+    beta: (block) => block("Other rules.\n"),
+    expected: ['alpha: skills/t/SKILL.md shared block "core" differs from skills/s/SKILL.md (copy it)'],
+  },
+  {
+    name: "a shared block left open",
+    beta: () => "<!-- shared: core -->\nSame rules.\n",
+    expected: ['alpha: skills/t/SKILL.md opens shared block "core" without <!-- /shared: core -->'],
+  },
+]) {
+  test(`fails: ${name}`, (t) => {
+    assert.deepEqual(problems(t, sharedSkills(beta)), expected);
+  });
+}
+
 test("a plugin with neither hooks nor tsconfig.json passes when it ships a skill", (t) => {
   assert.deepEqual(problems(t, skillsOnly), []);
 });

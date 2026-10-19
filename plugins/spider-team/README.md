@@ -1,6 +1,6 @@
 # spider-team
 
-`/spider-team <task>` makes the session the owner and main implementer of a task: it understands it, plans tasks with dependencies, writes the code itself, calls a planner, researcher or reviewer when they add value, splits off parallel workers only when independent parts gain from it, checks what comes back against the real diff, verifies the integrated result and delivers, while a band under the session card and a `/spider-agents` pane show the run. A delegate only claims it is done; a task counts once the session has reviewed it.
+`/spider-team:execute <task>` makes the session the owner and main implementer of a task: it understands it, plans tasks with dependencies, writes the code itself, calls a planner, researcher or reviewer when they add value, splits off parallel workers only when independent parts gain from it, checks what comes back against the real diff, verifies the integrated result and delivers, while a band under the session card and a `/spider-agents` pane show the run. A delegate only claims it is done; a task counts once the session has reviewed it.
 
 ```text
 /plugin install spider-team --marketplace anderson-spider/claude-mods
@@ -9,20 +9,21 @@
 ## Use
 
 ```text
-/spider-team add rate limiting to the public API
+/spider-team:execute add rate limiting to the public API
 ```
 
 The run goes through Understand, Plan, Investigate, Execute, Review, Verify and Complete. The session implements by default: simple, sequential or tightly coupled work stays with it, and a worker gets a task only when it can advance in parallel with other work on files nobody else is changing. No role is a mandatory step, and only the session runs Git commands that write or publish, as your current authorization allows.
 
 Asked to build a new project from an empty directory, the run starts it: it writes `docs/SPEC.md`, `docs/PLAN.md`, a short `AGENTS.md` and `filemap.md`, and delegates nothing until you approve the spec and the plan. Visual decisions stay with the session, which shows new screens as mockups first and reviews what was built itself; product questions the request leaves open go to you.
 
-To stop retyping the command, turn on session mode:
+Each mode is its own skill:
 
 | Command | What it does |
 | --- | --- |
-| `/spider-team on` | Every later message that asks for a change becomes tasks appended to one list, executed in order; questions are answered without a task, and an unclear message gets a one-line question. Messages sent while it works join the list. Verify runs each time the list drains. |
-| `/spider-team brainstorm <topic>` | Plans the topic into a backlog and waits: refine it in the conversation, then say go. In session mode the backlog joins the list. |
-| `/spider-team off` | Finishes or cancels the open tasks as you say, verifies and closes the run. |
+| `/spider-team:execute <task>` | One run of the task through the seven phases. |
+| `/spider-team:brainstorm <topic>` | Plans the topic into a backlog and waits: refine it in the conversation, then say go. In team mode the backlog joins the list. |
+| `/spider-team:team-on [subject]` | Team mode, to stop retyping the command: every later message that asks for a change becomes tasks appended to one list, executed in order; questions are answered without a task, and an unclear message gets a one-line question. Messages sent while it works join the list. Verify runs each time the list drains. |
+| `/spider-team:team-off` | Closes team mode: finishes or cancels the open tasks as you say, verifies and closes the run. |
 
 | Agent | Model | Default effort | For | Tools |
 | --- | --- | --- | --- | --- |
