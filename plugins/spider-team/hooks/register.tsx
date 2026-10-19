@@ -16,11 +16,11 @@ import { briefed, taskIdOf } from './tiers'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
-const runAtom = atom({ plugin: 'spider-progress', key: 'run' } as const, null as SpiderRun | null)
-const agentsAtom = atom({ plugin: 'spider-progress', key: 'agents' } as const, [] as SpiderAgent[])
-const mainAtom = atom({ plugin: 'spider-progress', key: 'main' } as const, { usage: ZERO } as SpiderMain)
-const panelAtom = atom({ plugin: 'spider-progress', key: 'panel' } as const, { open: false, compact: false } as SpiderPanel)
-const nowAtom = atom({ plugin: 'spider-progress', key: 'now' } as const, 0)
+const runAtom = atom({ plugin: 'spider-team', key: 'run' } as const, null as SpiderRun | null)
+const agentsAtom = atom({ plugin: 'spider-team', key: 'agents' } as const, [] as SpiderAgent[])
+const mainAtom = atom({ plugin: 'spider-team', key: 'main' } as const, { usage: ZERO } as SpiderMain)
+const panelAtom = atom({ plugin: 'spider-team', key: 'panel' } as const, { open: false, compact: false } as SpiderPanel)
+const nowAtom = atom({ plugin: 'spider-team', key: 'now' } as const, 0)
 
 const PANE = 'spider-agents'
 /** The narrowest pane the layout is drawn for; a narrower one truncates it. */
@@ -89,7 +89,7 @@ function debug($: Dollar, text: string, error?: unknown): void {
 /** Observation never changes what the host answered: a failure is one debug line. */
 async function observe($: Dollar, action: () => Promise<void>): Promise<void> {
   try { await action() } catch (error) {
-    debug($, 'spider-progress: observation failed', error)
+    debug($, 'spider-team: observation failed', error)
   }
 }
 
@@ -160,7 +160,7 @@ export const register: Register = (on, options) => {
           finished: { type: 'boolean', description: 'The run is complete.' },
           cancelled: { type: 'boolean', description: 'The run is cancelled; open tasks are cancelled.' },
         },
-      } satisfies SchemaFor<McpToolInputs['mcp__spider-progress__progress']>,
+      } satisfies SchemaFor<McpToolInputs['mcp__spider-team__progress']>,
     })
     await $.tool.register({
       name: 'step',
@@ -174,12 +174,12 @@ export const register: Register = (on, options) => {
           note: { type: 'string', description: 'What you are on, in a few words.' },
         },
         required: ['done', 'total'],
-      } satisfies SchemaFor<McpToolInputs['mcp__spider-progress__step']>,
+      } satisfies SchemaFor<McpToolInputs['mcp__spider-team__step']>,
     })
     await $.command.register({ name: PANE, description: 'Toggle the spider agents pane (open or close it)', argumentHint: '[open|close]' })
     // Each step on its own, so an unreadable language or state never leaves the session without its clock.
     await observe($, () => readLanguage($, held))
-    if (held.invalid.length) debug($, `spider-progress: invalid options fall back to defaults: ${held.invalid.join(', ')}`)
+    if (held.invalid.length) debug($, `spider-team: invalid options fall back to defaults: ${held.invalid.join(', ')}`)
     await observe($, () => reset($, held))
     await observe($, async () => {
       ensureTicker($, held)
@@ -200,7 +200,7 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__spider-progress__progress' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__spider-team__progress' }, async ($, e) => {
     if ((e as { agentId?: string }).agentId !== undefined) return { result: 'refused: only the main session reports the run' }
     try {
       const now = await $.clock.now()
@@ -215,12 +215,12 @@ export const register: Register = (on, options) => {
       if (isNew && held.config.autoOpen === 'team') await observe($, async () => { await openPane($, held, false) })
       return { result: text }
     } catch (error) {
-      debug($, 'spider-progress: progress failed', error)
+      debug($, 'spider-team: progress failed', error)
       return { result: 'error: the run could not be updated; go on with the work' }
     }
   })
 
-  on('tool.call', { tool: 'mcp__spider-progress__step' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__spider-team__step' }, async ($, e) => {
     try {
       const now = await $.clock.now()
       let text = ''
@@ -231,7 +231,7 @@ export const register: Register = (on, options) => {
       })
       return { result: text }
     } catch (error) {
-      debug($, 'spider-progress: step failed', error)
+      debug($, 'spider-team: step failed', error)
       return { result: 'error: the step could not be recorded; go on with the work' }
     }
   })
@@ -278,7 +278,7 @@ export const register: Register = (on, options) => {
     })
     return result
   }).catch(($, e, next) => {
-    debug($, `spider-progress: spawn hook failed: ${next.error.message ?? next.error.kind}`)
+    debug($, `spider-team: spawn hook failed: ${next.error.message ?? next.error.kind}`)
     return next(e)
   })
 
@@ -342,7 +342,7 @@ export const register: Register = (on, options) => {
       </Box>
       return <Box flexDirection="column">{drawn}{below}</Box>
     } catch (error) {
-      debug($, 'spider-progress: band render failed', error)
+      debug($, 'spider-team: band render failed', error)
       return below
     }
   })
@@ -374,7 +374,7 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     } catch (error) {
-      debug($, 'spider-progress: pane render failed', error)
+      debug($, 'spider-team: pane render failed', error)
       return { type: 'Text', props: { dimColor: true }, children: [t(held.lang).na] } satisfies RenderElement
     }
   })

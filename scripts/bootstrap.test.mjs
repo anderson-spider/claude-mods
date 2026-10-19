@@ -63,7 +63,7 @@ esac
 
 // The plugin list bootstrap.sh installs; check-consistency keeps it equal to marketplace.json.
 const ALL = /^ALL="([^"]*)"$/m.exec(readFileSync(script, "utf8"))[1].split(" ");
-const mutating = calls => calls.filter(c => /plugin (install|update|marketplace add|marketplace update)|-helper/.test(c));
+const mutating = calls => calls.filter(c => /plugin (install|update|uninstall|marketplace add|marketplace update)|-helper/.test(c));
 
 test("--check prints the steps and changes nothing", () => {
   const w = world();
@@ -105,6 +105,27 @@ test("a second run updates what is installed and runs the codex-computer-use hel
       ...ALL.map(p => `claude plugin update ${p}@${MARKET} --scope user`),
       "codex-computer-use-helper",
     ]);
+  } finally {
+    rmSync(w.root, { recursive: true, force: true });
+  }
+});
+
+test("a plugin merged into another is uninstalled when its successor is installed, and kept otherwise", () => {
+  const w = world({ installed: ["spider-progress", "tailscale"], marketplace: true });
+  try {
+    const only = w.run("--only", "tailscale");
+    assert.equal(only.status, 0, only.stderr);
+    assert.ok(!only.calls.some(c => c.includes("uninstall")), only.calls.join("\n"));
+    const check = w.run("--check", "--only", "spider-team");
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, new RegExp(`would: claude plugin uninstall spider-progress@${MARKET} --scope user`));
+    const r = w.run("--only", "spider-team");
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(mutating(r.calls).slice(-2), [
+      `claude plugin install spider-team@${MARKET} --scope user`,
+      `claude plugin uninstall spider-progress@${MARKET} --scope user`,
+    ]);
+    assert.ok(!ALL.includes("spider-progress"));
   } finally {
     rmSync(w.root, { recursive: true, force: true });
   }

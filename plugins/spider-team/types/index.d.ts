@@ -1,4 +1,4 @@
-// The state spider-progress keeps under `spider-progress`, and the inputs of the two tools it registers in
+// The state spider-team keeps under `spider-team` for its progress band and pane, and the inputs of the two tools it registers in
 // session.start, in the shape the engine lays for connected MCP tools. Keep the inputs in step with the inputSchema in
 // hooks/register.tsx. `tasks` and `task` are objects, which SchemaFor does not type, so they are `unknown` here and
 // checked in hooks/state.ts.
@@ -66,7 +66,7 @@ export type SpiderPanel = { open: boolean; compact: boolean; dismissedRunId?: st
 
 declare module 'claude-code' {
   interface PluginState {
-    'spider-progress': {
+    'spider-team': {
       run: SpiderRun | null
       agents: SpiderAgent[]
       main: SpiderMain
@@ -75,7 +75,7 @@ declare module 'claude-code' {
     }
   }
   interface McpToolInputs {
-    'mcp__spider-progress__progress': {
+    'mcp__spider-team__progress': {
       title?: string
       phase?: SpiderPhase
       tasks?: unknown
@@ -83,7 +83,7 @@ declare module 'claude-code' {
       finished?: boolean
       cancelled?: boolean
     }
-    'mcp__spider-progress__step': {
+    'mcp__spider-team__step': {
       done: number
       total: number
       note?: string
