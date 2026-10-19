@@ -45,7 +45,6 @@ Set them in `/plugin` (or `pluginConfigs["spider-team@spider-claude-mods"].optio
 | `autoOpen` | `team` | when the pane opens on its own: `team` when a run starts, `any` when a subagent starts with none running, `off` only with `/spider-agents`; a pane you close stays closed for the agents already at work |
 | `showCost`, `showTokens`, `showContext` | on | the estimated cost, the token counts and the context of each agent |
 | `animations` | on | a spinner beside running agents; off keeps a fixed mark |
-| `compactMode` | off | start the pane with one line per agent (`c` toggles it) |
 | `historyLimit` | 200 | how many agents the pane remembers (20 to 1000) |
 
 An invalid band or pane option falls back to its default. An effort you ask for in the conversation, for a role or a task, goes in place of the option. With [subagent-effort](../subagent-effort/README.md) active, Jev's rating replaces the effort of every subagent call, yours included: that is how the plugin works, and spider-team does not work around it. The session's own effort is yours to set with `/effort`; neither plugin changes it.
@@ -66,8 +65,6 @@ An invalid band or pane option falls back to its default. An effort you ask for 
   - **Other agents**: the session's agents outside the run.
   - **Last 15 minutes**: a bar per agent over time, running, finished or failed.
   - **Totals**: tokens, cost and context of the session's main thread, its subagents and the whole session.
-  
-  `c` switches between the full view and a compact one (the plan's counts and a line per agent).
 - **Outside a run** the pane still lists every subagent; the band stays hidden.
 - **With session-hud** the band sits right under its card when spider-team comes after session-hud in your settings, which a later install does; listed before it, the band draws above the card.
 

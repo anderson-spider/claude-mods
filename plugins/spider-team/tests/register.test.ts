@@ -416,7 +416,7 @@ test('a pane that cannot be drawn logs why and draws one line instead of failing
   await ui.unmount()
 })
 
-test('the pane draws its lines in the monospaced face on the terminal and the desktop, so its columns line up', async ($, on) => {
+test('the pane draws its lines and section titles in the monospaced face on the terminal and the desktop, titles bold, with no buttons', async ($, on) => {
   const { tools } = world(on)
   await started($, tools)
   await call($, 'progress', PLAN)
@@ -424,6 +424,12 @@ test('the pane draws its lines in the monospaced face on the terminal and the de
     const ui = await $.ui.mount(pane(100, surface))
     const line = await ui.find({ type: 'Text', text: /T1 Build login/ })
     expect(line?.props.mono).toBe(true)
+    const plan = await ui.find({ type: 'Text', text: 'Plan' })
+    expect(plan?.props).toMatchObject({ mono: true, weight: 'bold', color: 'suggestion' })
+    const totals = await ui.find({ type: 'Text', text: 'Totals' })
+    expect(totals?.props).toMatchObject({ mono: true, weight: 'bold', dimColor: true })
+    expect(totals?.props.color).toBeUndefined()
+    expect(await ui.find({ type: 'Button' })).toBeFalsy()
     await ui.unmount()
   }
 })

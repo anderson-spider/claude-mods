@@ -14,7 +14,7 @@ export type Strings = {
   task: { pending: string; blocked: string; running: string; reviewing: string; completed: string; failed: string; cancelled: string }
   pane: {
     title: string; noRun: string; noAgents: string; plan: string; running: string; recent: string; others: string; timeline: string; totals: string
-    main: string; subagents: string; session: string; compact: string; expanded: string; tokens: string; cost: string; context: string
+    main: string; subagents: string; session: string; tokens: string; cost: string; context: string
     steps: string; calls: string; callsOne: string; waits: string; more: string; justNow: string; minutesAgo: string; hoursAgo: string; now: string; finished: string
   }
   command: { opened: string; waits: string; closed: string; usage: string }
@@ -38,7 +38,7 @@ export const STRINGS: Record<Lang, Strings> = {
     task: { pending: 'pending', blocked: 'blocked', running: 'running', reviewing: 'reviewing', completed: 'accepted', failed: 'failed', cancelled: 'cancelled' },
     pane: {
       title: 'Spider agents', noRun: 'No spider-team run', noAgents: 'No agents yet', plan: 'Plan', running: 'Running', recent: 'Recent', others: 'Other agents', timeline: 'Last 15 minutes', totals: 'Totals',
-      main: 'Main', subagents: 'Subagents', session: 'Session', compact: 'compact view', expanded: 'full view', tokens: 'Tokens', cost: 'Cost', context: 'Context',
+      main: 'Main', subagents: 'Subagents', session: 'Session', tokens: 'Tokens', cost: 'Cost', context: 'Context',
       steps: 'steps', calls: 'calls', callsOne: 'call', waits: 'waits', more: '+{n} more', justNow: 'just now', minutesAgo: '{n} min ago', hoursAgo: '{n} h ago', now: 'now', finished: 'finished',
     },
     command: { opened: 'Agents pane open.', waits: 'The agents pane waits for room:', closed: 'Agents pane closed.', usage: 'Usage: /spider-agents [open|close]' },
@@ -54,7 +54,7 @@ export const STRINGS: Record<Lang, Strings> = {
     task: { pending: 'pendente', blocked: 'bloqueada', running: 'rodando', reviewing: 'em revisão', completed: 'aceita', failed: 'falhou', cancelled: 'cancelada' },
     pane: {
       title: 'Agentes spider', noRun: 'Nenhuma execução do spider-team', noAgents: 'Nenhum agente ainda', plan: 'Plano', running: 'Rodando', recent: 'Recentes', others: 'Outros agentes', timeline: 'Últimos 15 minutos', totals: 'Totais',
-      main: 'Main', subagents: 'Subagentes', session: 'Sessão', compact: 'visão compacta', expanded: 'visão completa', tokens: 'Tokens', cost: 'Custo', context: 'Contexto',
+      main: 'Main', subagents: 'Subagentes', session: 'Sessão', tokens: 'Tokens', cost: 'Custo', context: 'Contexto',
       steps: 'passos', calls: 'chamadas', callsOne: 'chamada', waits: 'aguarda', more: '+{n} mais', justNow: 'agora', minutesAgo: 'há {n} min', hoursAgo: 'há {n} h', now: 'agora', finished: 'terminou',
     },
     command: { opened: 'Painel de agentes aberto.', waits: 'O painel de agentes espera espaço:', closed: 'Painel de agentes fechado.', usage: 'Uso: /spider-agents [open|close]' },
