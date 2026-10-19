@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# npm run plugins:types [-- <name>] — generate the claude-code typings one plugin's (or every plugin's) tsconfig.json extends.
+# npm run plugins:types [-- <name>...] — generate the claude-code typings the named plugins' (or every plugin's) tsconfig.json extends.
 # Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,
 # so this opens one on a pseudo-terminal with the plugin (or every plugin) and exits once each has its typings.
 # It runs your own claude, so the typings carry the version your sessions run.
 set -euo pipefail
 . scripts/tasks/lib.sh
 use_own_claude
-name=${1:-}
-if [ -n "$name" ]; then
-  [[ "$name" =~ ^[a-z][a-z0-9-]*$ && -d "plugins/$name" ]] || { echo "no such plugin: $name" >&2; exit 1; }
-  [ -f "plugins/$name/tsconfig.json" ] || { echo "$name ships skills only and has no typings" >&2; exit 1; }
-  dirs=("plugins/$name/")
+name=${*:-}
+if [ "$#" -gt 0 ]; then
+  dirs=()
+  for n in "$@"; do
+    [[ "$n" =~ ^[a-z][a-z0-9-]*$ && -d "plugins/$n" ]] || { echo "no such plugin: $n" >&2; exit 1; }
+    [ -f "plugins/$n/tsconfig.json" ] || { echo "$n ships skills only and has no typings" >&2; exit 1; }
+    dirs+=("plugins/$n/")
+  done
 else
   dirs=()
   for d in plugins/*/; do [ -f "${d}tsconfig.json" ] && dirs+=("$d"); done
