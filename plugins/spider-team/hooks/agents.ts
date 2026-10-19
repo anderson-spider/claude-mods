@@ -8,7 +8,7 @@ const NOTE_MAX = 200
 const STEP_MAX = 1000
 /** How many of an agent's latest tools it keeps by name. */
 export const TOOLS_KEPT = 3
-const OWN_TOOLS = 'mcp__spider-progress__'
+const OWN_TOOLS = 'mcp__spider-team__'
 
 /** A spawned agent joins the list as running; a second spawn event for the same id changes nothing. */
 export function spawned(list: SpiderAgent[], a: { agentId: string; type?: string; model?: string; prompt: string; now: number }, limit: number): SpiderAgent[] {

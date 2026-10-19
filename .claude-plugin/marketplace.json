@@ -43,14 +43,9 @@
       "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors."
     },
     {
-      "name": "spider-progress",
-      "source": "./plugins/spider-progress",
-      "description": "Progress band under the session card and an agents pane for spider-team runs and any subagent"
-    },
-    {
       "name": "spider-team",
       "source": "./plugins/spider-team",
-      "description": "/spider-team: the session implements the task, calls a planner, researcher or reviewer when they help, and splits off parallel workers only when that pays"
+      "description": "/spider-team: the session implements the task, calls a planner, researcher or reviewer when they help, splits off parallel workers only when that pays, and shows the run in a progress band and an agents pane"
     },
     {
       "name": "subagent-effort",

@@ -1,14 +1,24 @@
 {
   "name": "spider-team",
-  "version": "0.16.0",
-  "description": "/spider-team: the session implements the task, calls a planner, researcher or reviewer when they help, and splits off parallel workers only when that pays",
+  "version": "0.17.0",
+  "description": "/spider-team: the session implements the task, calls a planner, researcher or reviewer when they help, splits off parallel workers only when that pays, and shows the run in a progress band and an agents pane",
   "author": {
     "name": "anderson-spider"
   },
   "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/spider-team",
   "repository": "https://github.com/anderson-spider/claude-mods",
   "license": "MIT",
-  "keywords": ["skill", "orchestration", "subagents", "agents", "claude-code"],
+  "keywords": [
+    "skill",
+    "orchestration",
+    "subagents",
+    "agents",
+    "claude-code",
+    "progress",
+    "pane",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
   "userConfig": {
     "max_workers": {
       "type": "number",
@@ -23,28 +33,110 @@
       "title": "Planner effort",
       "description": "The effort /spider-team asks for when it calls the planner (Opus 5.5). subagent-effort, when active, replaces it.",
       "default": "medium",
-      "options": ["low", "medium", "high", "xhigh", "max"]
+      "options": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     "worker_effort": {
       "type": "string",
       "title": "Worker effort",
       "description": "The effort /spider-team asks for when it calls the worker (Sonnet 5.5). subagent-effort, when active, replaces it.",
       "default": "medium",
-      "options": ["low", "medium", "high", "xhigh", "max"]
+      "options": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     "researcher_effort": {
       "type": "string",
       "title": "Researcher effort",
       "description": "The effort /spider-team asks for when it calls the researcher (Haiku 5.5). subagent-effort, when active, replaces it.",
       "default": "medium",
-      "options": ["low", "medium", "high", "xhigh", "max"]
+      "options": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     "reviewer_effort": {
       "type": "string",
       "title": "Reviewer effort",
       "description": "The effort /spider-team asks for when it calls the reviewer (Opus 5.5). subagent-effort, when active, replaces it.",
       "default": "medium",
-      "options": ["low", "medium", "high", "xhigh", "max"]
+      "options": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "auto follows the Claude Code language setting, then the system locale; pt-BR or en fix it.",
+      "options": [
+        "auto",
+        "pt-BR",
+        "en"
+      ],
+      "default": "auto"
+    },
+    "autoOpen": {
+      "type": "string",
+      "title": "Open the agents pane",
+      "description": "team: when a spider-team run starts; any: when a subagent starts with none running; off: only with /spider-agents.",
+      "options": [
+        "team",
+        "any",
+        "off"
+      ],
+      "default": "team"
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "Show estimated cost",
+      "description": "Estimated from token counts and a dated price table; never a bill.",
+      "default": true
+    },
+    "showTokens": {
+      "type": "boolean",
+      "title": "Show tokens",
+      "description": "Input, output and cache tokens per agent and in total.",
+      "default": true
+    },
+    "showContext": {
+      "type": "boolean",
+      "title": "Show context",
+      "description": "How full each agent's context window is, when the window is known.",
+      "default": true
+    },
+    "animations": {
+      "type": "boolean",
+      "title": "Animations",
+      "description": "A spinner beside running agents; off keeps a fixed mark.",
+      "default": true
+    },
+    "compactMode": {
+      "type": "boolean",
+      "title": "Compact pane",
+      "description": "Start the pane with one line per agent ('c' in the pane toggles it).",
+      "default": false
+    },
+    "historyLimit": {
+      "type": "number",
+      "title": "Agents kept",
+      "description": "How many agents the pane remembers (20 to 1000); the oldest finished ones go first.",
+      "default": 200
     }
   }
 }

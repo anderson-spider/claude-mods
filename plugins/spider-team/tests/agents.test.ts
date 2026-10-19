@@ -143,11 +143,11 @@ test('a running agent keeps its last tools, its call count and its failed calls;
 })
 
 test("the plugin's own tools are not activity, and an MCP tool reads by its own name", () => {
-  expect(toolName('mcp__spider-progress__step')).toBeUndefined()
+  expect(toolName('mcp__spider-team__step')).toBeUndefined()
   expect(toolName('mcp__plugin_context-mode_context-mode__ctx_search')).toBe('ctx_search')
   expect(toolName('Read')).toBe('Read')
   const list = spawn()
-  expect(toolUsed(list, 'a1', 'mcp__spider-progress__step', false, 5)).toBe(list)
+  expect(toolUsed(list, 'a1', 'mcp__spider-team__step', false, 5)).toBe(list)
 })
 
 test('a failed agent keeps why it ended; a done or cancelled one keeps no reason', () => {

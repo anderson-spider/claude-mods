@@ -17,8 +17,8 @@ export const tierOf = (type?: string): SpiderTier | undefined => (type ? (TIER_T
 /** The task a brief names on a line of its own, `spider-task: T3`. */
 export const taskIdOf = (prompt: string): string | undefined => /^spider-task:\s*(T\d{1,3})\s*$/m.exec(prompt)?.[1]
 
-export const STEP_BRIEF = '\n\nReport your progress with the mcp__spider-progress__step tool (load it with ToolSearch if it is deferred): first { done: 0, total: <the steps you plan> }, then again after each step. If the tool does not exist, skip this.'
+export const STEP_BRIEF = '\n\nReport your progress with the mcp__spider-team__step tool (load it with ToolSearch if it is deferred): first { done: 0, total: <the steps you plan> }, then again after each step. If the tool does not exist, skip this.'
 
 /** A role agent's prompt with the step brief appended once, unless it already names the step tool. */
 export const briefed = (prompt: string, type?: string): string =>
-  tierOf(type) && !prompt.includes('mcp__spider-progress__step') ? `${prompt}${STEP_BRIEF}` : prompt
+  tierOf(type) && !prompt.includes('mcp__spider-team__step') ? `${prompt}${STEP_BRIEF}` : prompt

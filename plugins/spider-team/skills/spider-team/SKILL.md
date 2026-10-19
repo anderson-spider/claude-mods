@@ -76,13 +76,13 @@ Done when: <the completion criteria and the checks to run>
 Deliver: <the changes, the evidence and what is left open>
 ```
 
-The first line `spider-task: T<n>` stays exactly as written: it ties the agent to its task, which spider-progress then moves to running and to review. Write it only when the agent owns that task in the plan. A call that owns no task (the planner before the plan exists, a researcher's unplanned question, a review of a task another owner implemented) leaves the line out; to track such a call, plan it as its own task first. A reviewer's brief also carries the requirements, the diff and the check results.
+The first line `spider-task: T<n>` stays exactly as written: it ties the agent to its task, which the progress band then moves to running and to review. Write it only when the agent owns that task in the plan. A call that owns no task (the planner before the plan exists, a researcher's unplanned question, a review of a task another owner implemented) leaves the line out; to track such a call, plan it as its own task first. A reviewer's brief also carries the requirements, the diff and the check results.
 
 Use the isolation the repository requires and the agent setup supports; do not add worktrees by default.
 
 ## Reporting
 
-When the tool `mcp__spider-progress__progress` exists (load it with ToolSearch if it is deferred), publish the run with it; when it does not, skip reporting and carry on. A refused call says why: fix the call or carry on; reporting never blocks the work.
+When the tool `mcp__spider-team__progress` exists (load it with ToolSearch if it is deferred), publish the run with it; when it does not, skip reporting and carry on. A refused call says why: fix the call or carry on; reporting never blocks the work.
 
 - After the plan: `{ title, phase: "plan", tasks: [{ id, title, owner, after, criteria }] }`. The title is a short name for the task (in session mode, for the session's subject), kept the same for the whole run.
 - At each phase change: `{ phase }`. The phases `complete`, `cancelled` and `failed` close the run as `finished` does, so send them only at the end; in session mode, not before `off`.
