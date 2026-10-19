@@ -49,7 +49,7 @@ codex-computer-use also needs a local helper on the Mac: follow [its install ste
 curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh
 ```
 
-Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure gitlab` for its `tokens`, `claude plugin configure tailscale` for its `apiKey` and `claude plugin configure coolify` for its `url` and `apiKey`.
+Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure gitlab` for its `tokens`, `claude plugin configure tailscale` for its `apiKey` `claude plugin configure coolify` for its `url` and `apiKey`, and `claude plugin configure subagent-effort` for its `apiKey` (or set `JEV_API_KEY`).
 
 ### Update
 
