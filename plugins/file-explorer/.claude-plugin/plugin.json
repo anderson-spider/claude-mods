@@ -1,6 +1,6 @@
 {
   "name": "file-explorer",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "File tree pane that follows Claude's reads, edits and searches, with git status, search, preview and path references",
   "author": {
     "name": "anderson-spider"
@@ -9,7 +9,6 @@
   "repository": "https://github.com/anderson-spider/claude-mods",
   "license": "MIT",
   "keywords": ["files", "tree", "explorer", "git", "pane", "mod", "claude-code"],
-  "types": "./types/index.d.ts",
   "userConfig": {
     "autoOpen": {
       "type": "boolean",
