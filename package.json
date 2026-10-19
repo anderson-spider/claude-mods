@@ -19,7 +19,7 @@
     "install:test": "bash scripts/tasks/install-test.sh"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-code": "2.1.301",
+    "@anthropic-ai/claude-code": "2.1.303",
     "typescript": "7.0.2"
   }
 }

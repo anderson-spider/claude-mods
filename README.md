@@ -22,7 +22,7 @@ Each plugin README covers its setup, what it reads, sends and saves, and what it
 
 ## Install
 
-Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.301 (`claude --version`).
+Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.303 (`claude --version`).
 
 ```
 /plugin marketplace add anderson-spider/claude-mods
