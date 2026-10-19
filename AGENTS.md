@@ -26,7 +26,7 @@ Node 24 (`.nvmrc`; any version manager that reads it works), then `npm ci` once.
 
 - Registration: one entry module (`register.tsx`) in `hooks.json`. Keep `on(...)` and `$.noun.method(...)` calls visible to the engine's source analysis: pass `$` only to a top-level function in the same file, never across an import. Subfolder registrars may own their hooks and `$` calls; pure modules take injected host access. Tests mirror modules.
 - Tool inputs: each `mcp__<plugin>__<name>` entry in `types/index.d.ts` must match its `inputSchema` (`SchemaFor`, `hooks/schema.ts`, identical in every plugin and in `scripts/plugin-template/`).
-- Typings: loading a plugin writes its git-ignored `.claude-plugin/types/`, which its `tsconfig.json` extends (`noEmit` is required). In a worktree, `node scripts/ensure-plugin-types.mjs` copies complete snapshots from the main checkout when they match the running Claude Code version; otherwise run `npm run plugins:types [-- <name>]`. Regenerate after changing MCP integrations: cached `claude-code-mcp` declarations reflect the main checkout's last connected tools.
+- Typings: loading a plugin writes its git-ignored `.claude-plugin/types/`, which its `tsconfig.json` extends (`noEmit` is required). Without them (a fresh worktree, a new Claude Code version), run `npm run plugins:types [-- <name>]`. Regenerate after changing MCP integrations: cached `claude-code-mcp` declarations reflect the main checkout's last connected tools.
 - Scripts in `scripts/` have a `*.test.mjs` beside them; the task shells in `scripts/tasks/` are thin wrappers over them and the `claude` CLI, without tests of their own.
 
 ## Done for a plugin change
