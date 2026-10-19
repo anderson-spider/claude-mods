@@ -2,7 +2,7 @@
 import type { On, RenderElement } from 'claude-code'
 import { expect, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { PluginState } from 'claude-code'
+import type { PluginState, ShapedValue } from 'claude-code'
 
 export type Tool = { name: string; description: string; inputSchema: { properties: Record<string, { description?: string }> } }
 
@@ -18,16 +18,20 @@ export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['ben
  * A host recording tools, panes, spawned prompts and debug logs; a spawn starts `agent-1`, `agent-2`... on the model it names,
  * and a resume keeps its id. `broken.clock` makes the clock throw and `broken.settings` the settings read; `spawnTakes` is how
  * long the host takes to answer a spawn on the mock clock; `answeredBy` is the model a step's usage names; `context.window` is
- * the window the host measures; `stored` holds the plugin's state as last written.
+ * the window the host measures; `stored` holds the plugin's state as last written; `listed` is what `$.agent.list()` answers,
+ * each spawn added running; `session` is the session's id; `disk` is the plugin's store.
  */
 export function world(on: On, opts: { language?: string; env?: Record<string, string>; broken?: { clock?: boolean; settings?: boolean }; spawnTakes?: number; answeredBy?: string } = {}) {
   const tools: Tool[] = []
   const logs: string[] = []
   const context = { window: 500_000 }
-  const stored: { [K in keyof PluginState['spider-team']]?: PluginState['spider-team'][K] } = {}
+  const stored: { [K in keyof PluginState['spider-team']]?: ShapedValue<PluginState['spider-team'][K]> } = {}
   const opened: string[] = []
   const prompts: string[] = []
   let spawns = 0
+  const listed: { id: string; status: string }[] = []
+  const session = { id: 's1' }
+  const disk = new Map<string, unknown>()
   const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On)
   on('clock.now', () => {
     if (opts.broken?.clock) throw new Error('the clock is down')
@@ -42,7 +46,7 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   on('ui.panes', () => ({ value: opened.map(pane => ({ id: pane, title: 'Spider agents' })) }) as never)
   on('state.set', async (_$, e, next) => {
     const result = await next(e)
-    if ((result as unknown as { value?: { isSet?: boolean } }).value?.isSet && e.plugin === 'spider-team') (stored as Record<string, unknown>)[e.key] = e.value
+    if ((result as unknown as { value?: { isSet?: boolean } }).value?.isSet && e.plugin === 'spider-team') (stored as Record<string, unknown>)[e.key] = (e.value as { value: unknown }).value
     return result
   })
   on('ui.log', (_$, e) => (logs.push(e.text), { value: undefined }))
@@ -56,15 +60,23 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   on('agent.spawn', async (_$, e) => {
     prompts.push(e.prompt)
     if (opts.spawnTakes) await clock.sleep(opts.spawnTakes)
-    return { model: e.model ?? 'claude-sonnet-5-5', agentId: e.resume?.agentId ?? `agent-${++spawns}` }
+    const agentId = e.resume?.agentId ?? `agent-${++spawns}`
+    if (!listed.some(agent => agent.id === agentId)) listed.push({ id: agentId, status: 'running' })
+    return { model: e.model ?? 'claude-sonnet-5-5', agentId }
   })
   on('turn.step', async function* (_$, e) {
     const usage = { model: opts.answeredBy ?? e.model, input_tokens: 1_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
   })
   on('turn.complete', () => ({ text: 'done' }) as never)
+  on('agent.list', () => ({ value: listed }) as never)
+  on('session.id', () => ({ value: session.id }) as never)
+  on('store.get', (_$, e) => ({ value: disk.get(e.key) }) as never)
+  on('store.set', (_$, e) => (disk.set(e.key, JSON.parse(JSON.stringify(e.value))), { value: undefined }) as never)
+  on('store.delete', (_$, e) => (disk.delete(e.key), { value: undefined }) as never)
+  on('store.keys', () => ({ value: [...disk.keys()] }) as never)
   on('ui.render', { component: 'AbovePrompt' }, () => BENEATH)
-  return { tools, opened, prompts, clock, logs, context, stored }
+  return { tools, opened, prompts, clock, logs, context, stored, listed, session, disk }
 }
 
 export async function started($: Engine, tools: Tool[]): Promise<string[]> {

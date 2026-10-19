@@ -11,7 +11,7 @@ const end = ($: Engine, agentId: string, reason = 'answer') => $.turn.complete({
 test('session start registers progress, step and the spider-agents command', async ($, on) => {
   const { tools } = world(on)
   expect(await started($, tools)).toEqual(['progress', 'step'])
-  expect((await run($, 'nonsense')).text).toBe('Usage: /spider-agents [open|close]')
+  expect((await run($, 'nonsense')).text).toBe('Usage: /spider-agents [open|close|clear]')
 })
 
 test('progress from a subagent is refused; step from the main session is refused', async ($, on) => {
@@ -282,8 +282,8 @@ test('an ending held from an earlier turn does not end a later resume', async ($
   expect(stored.agents?.find(a => a.agentId === agentId)?.status).toBe('running')
 })
 
-test('a settings read that fails at start still resets the state and starts the clock', async ($, on) => {
-  const { tools, clock, stored } = world(on, { broken: { settings: true } })
+test('a settings read that fails at start still starts the clock, and a reload keeps the run and ends agents the host no longer lists', async ($, on) => {
+  const { tools, clock, stored, listed } = world(on, { broken: { settings: true } })
   await started($, tools)
   expect(stored.now).toBe(NOW)
   await call($, 'progress', PLAN)
@@ -292,9 +292,13 @@ test('a settings read that fails at start still resets the state and starts the 
   await clock.advance(1_000)
   await flush()
   expect(stored.now).toBe(NOW + 1_000)
+  expect(stored.agents?.[0]?.status).toBe('running')
+  // The reload missed the Explore agent's ending: the host no longer lists it.
+  listed.length = 0
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
   await flush()
-  expect(stored.run).toBeNull()
+  expect(stored.run?.title).toBe('Auth')
+  expect(stored.agents?.[0]?.status).toBe('cancelled')
 })
 
 test('the clock ticks once a second only while an agent runs', async ($, on) => {
@@ -421,4 +425,58 @@ test('the terminal draws the cards as monospaced lines with the title bold in th
   expect(svg?.props.isInteractive).toBeUndefined()
   expect(await desktop.find({ type: 'Button' })).toBeFalsy()
   await desktop.unmount()
+})
+
+test('the open run is kept in the store under the session and comes back after the state is lost; a closed run leaves it', async ($, on) => {
+  const { tools, stored, disk } = world(on)
+  await started($, tools)
+  await call($, 'progress', PLAN)
+  expect((disk.get('run:s1') as { run: { title: string } }).run.title).toBe('Auth')
+  // A restarted app starts with no state but the store: an end that is no /clear or resume drops the memory.
+  await $.session.end({ reason: 'logout', sessionId: 's', resume: { id: 's' } } as never)
+  await flush()
+  expect(stored.run).toBeNull()
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  await flush()
+  expect(stored.run?.title).toBe('Auth')
+  expect(await call($, 'progress', { finished: true })).toMatch(/^ok/)
+  expect(disk.has('run:s1')).toBe(false)
+  await $.session.end({ reason: 'logout', sessionId: 's', resume: { id: 's' } } as never)
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  await flush()
+  expect(stored.run).toBeNull()
+})
+
+test("a resume in this process brings back the resumed session's run on Main's first turn end, and another session's run stays out", async ($, on) => {
+  const { tools, stored, session } = world(on)
+  await started($, tools)
+  await call($, 'progress', PLAN)
+  await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } } as never)
+  session.id = 's2'
+  await $.turn.complete({ turnId: 't1', answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  expect(stored.run).toBeNull()
+  await $.session.end({ reason: 'resume', sessionId: 's2', resume: { id: 's2' } } as never)
+  session.id = 's1'
+  await $.turn.complete({ turnId: 't2', answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  expect(stored.run?.title).toBe('Auth')
+})
+
+test('/spider-agents clear forgets the run, the agents and their usage, and removes the saved run; the pane stays open', async ($, on) => {
+  const { tools, stored, disk, opened } = world(on)
+  await started($, tools)
+  await call($, 'progress', PLAN)
+  await spawn($, 'Find the router.', 'Explore')
+  await flush()
+  await run($, 'open')
+  expect((await run($, 'clear')).text).toBe('Agents pane cleared: the run, the agents and their usage are forgotten.')
+  expect(stored.run).toBeNull()
+  expect(stored.agents).toEqual([])
+  expect(stored.main).toEqual({ usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })
+  expect(disk.has('run:s1')).toBe(false)
+  expect(opened).toContain('spider-agents')
+  await $.turn.complete({ turnId: 't1', answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  expect(stored.run).toBeNull()
 })

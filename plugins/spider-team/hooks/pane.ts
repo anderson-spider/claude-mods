@@ -213,7 +213,7 @@ function listed(agents: SpiderAgent[], s: Strings, row: (a: SpiderAgent) => Piec
   return [...agents.slice(0, LISTED).map(row), ...(extra > 0 ? [[p(`  ${fill(s.pane.more, extra)}`, 'dim')]] : [])]
 }
 
-/** A lane per role across the last 15 minutes in one-minute buckets, lit where the role worked: Main, then the roles. */
+/** A lane per role across the last 15 minutes in one-minute buckets, lit where it worked: Main and spider-team's four roles always, idle ones empty, then other agent types that worked. */
 function timelineLines(v: PaneView, s: Strings, inner: number): Piece[][] {
   const from = v.now - TIMELINE_MS
   const cw = Math.floor((inner - LANE_LABEL) / BUCKETS)
@@ -223,12 +223,11 @@ function timelineLines(v: PaneView, s: Strings, inner: number): Piece[][] {
   for (const turn of v.main.turns ?? []) add('main', turn)
   if (v.main.busySince !== undefined) add('main', [v.main.busySince, v.now])
   for (const a of v.agents) add(nameOf(a), [a.startedAt, a.endedAt ?? v.now])
-  if (!spans.size) return []
-  const lanes = [...ROLES.filter(role => spans.has(role)), ...[...spans.keys()].filter(lane => !ROLES.includes(lane as SpiderTier)).sort()]
+  const lanes = [...ROLES, ...[...spans.keys()].filter(lane => !ROLES.includes(lane as SpiderTier)).sort()]
   const rows = lanes.map(lane => {
     const lit = Array.from({ length: BUCKETS }, (_, i) => {
       const [start, end] = [from + i * 60_000, from + (i + 1) * 60_000]
-      return spans.get(lane)!.some(([a, b]) => a < end && b > start)
+      return (spans.get(lane) ?? []).some(([a, b]) => a < end && b > start)
     })
     const runs: Piece[] = []
     for (const on of lit) {
