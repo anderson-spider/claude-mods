@@ -68,12 +68,14 @@ declare module 'claude-code' {
     }
     'mcp__comfyui-local__save_workflow': {
       path: string
-      workflow: unknown
+      workflow?: unknown
+      file?: string
       overwrite?: boolean
     }
     'mcp__comfyui-local__list_workflows': {}
     'mcp__comfyui-local__get_workflow': {
       path: string
+      file?: string
     }
   }
 }

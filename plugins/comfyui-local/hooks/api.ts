@@ -726,7 +726,12 @@ export async function runManagerTask(fetch: Fetch, base: string, input: ManagerT
   return ok(`${what} queued (task ${uiId}). manager_packs shows the task queue and recent results; a restart of ComfyUI (restart_server) is needed before new or removed nodes show in search_nodes.`)
 }
 
-/** How restart_server waits for the server to come back: one GET /system_stats every `RESTART_POLL_MS`, for `RESTART_TIMEOUT_MS` at most. */
+/**
+ * How restart_server waits for the server to come back: one GET /system_stats every `RESTART_POLL_MS`, for
+ * `RESTART_TIMEOUT_MS` at most; after a dropped connection the first comes at `RESTART_FIRST_POLL_MS`, while the
+ * re-executed process is surely still down.
+ */
+export const RESTART_FIRST_POLL_MS = 500
 export const RESTART_POLL_MS = 2_000
 export const RESTART_TIMEOUT_MS = 120_000
 
@@ -755,7 +760,7 @@ export type RestartInput = { force?: unknown }
 /**
  * Restarts ComfyUI through the Manager's POST /v2/manager/reboot and waits for /system_stats to answer again. It refuses
  * while the queue holds a job, unless `force`. The reboot re-executes the process (or, under comfy-cli, exits and leaves
- * comfy-cli a marker to start it again), so the connection usually drops: that, or an empty answer, is the restart beginning.
+ * comfy-cli a marker to start it again), so the connection usually drops; the restart counts once a poll finds it down.
  */
 export async function restartServer(fetch: Fetch, base: string, input: RestartInput, clock: Clock): Promise<Out> {
   const queue = await getJson(fetch, base, '/queue')
@@ -768,23 +773,25 @@ export async function restartServer(fetch: Fetch, base: string, input: RestartIn
   const started = await clock.now()
   // Sent as JSON: the Manager answers 400 to the content types a plain HTML form can post (its CSRF guard).
   const sent = await postJson(fetch, base, '/v2/manager/reboot', {})
-  // A proxy in front of the server answers the dropped connection with a gateway error: the restart began there too.
-  let wentDown = sent.error !== undefined || (sent.res !== undefined && sent.res.status >= 502 && sent.res.status <= 504)
-  if (sent.res && !sent.res.ok && !wentDown) {
+  // A dropped connection, an empty answer or a proxy's gateway error may each be the restart beginning; only a poll
+  // that finds the server down proves it, so an answer before that comes from a process that never restarted.
+  const gateway = sent.res !== undefined && sent.res.status >= 502 && sent.res.status <= 504
+  const dropped = sent.error !== undefined || gateway
+  if (sent.res && !sent.res.ok && !gateway) {
     if (sent.res.status === 403) return fail(REBOOT_FORBIDDEN)
     if (sent.res.status === 404) return fail(MANAGER_OFF)
     return fail(`The Manager refused the reboot (${sent.res.status}): ${sent.res.text.slice(0, 500)}`)
   }
   let stats: unknown
-  for (;;) {
-    await clock.sleep(RESTART_POLL_MS)
+  let wentDown = false
+  for (let poll = 0; ; poll++) {
+    await clock.sleep(poll === 0 && dropped ? RESTART_FIRST_POLL_MS : RESTART_POLL_MS)
     const got = await getJson(fetch, base, '/system_stats')
     if (!got.error && wentDown) {
       stats = got.value
       break
     }
-    // An answer before the server was ever seen down comes from the old process: the reboot did not take.
-    if (!got.error) return fail('The Manager answered the reboot, but ComfyUI kept running without restarting (see the server log).')
+    if (!got.error) return fail('The reboot was sent, but ComfyUI kept running without restarting (see the server log).')
     wentDown = true
     if ((await clock.now()) - started >= RESTART_TIMEOUT_MS) {
       return fail(`The reboot was sent, but ComfyUI did not answer /system_stats within ${RESTART_TIMEOUT_MS / 1000} s. Check the service on the server: under systemd, its status and journal.`)
@@ -833,13 +840,36 @@ export function uiWorkflow(value: unknown): { workflow: Record<string, unknown>;
 /** When a userdata file was last modified, from its milliseconds since the epoch. */
 const when = (ms: unknown) => (typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : '?')
 
-export type SaveWorkflowInput = { path?: unknown; workflow?: unknown; overwrite?: unknown }
+/** Reads and writes a local text file: the host's file access, injected. */
+export type ReadText = (path: string) => Promise<string>
+export type WriteText = (path: string, text: string) => Promise<void>
 
-/** Saves a UI-format workflow to the user's library with POST /api/userdata/workflows%2F<path>.json, refusing to replace a file unless `overwrite`. */
-export async function saveWorkflow(fetch: Fetch, base: string, input: SaveWorkflowInput): Promise<Out> {
+export type SaveWorkflowInput = { path?: unknown; workflow?: unknown; file?: unknown; overwrite?: unknown }
+
+/**
+ * Saves a UI-format workflow to the user's library with POST /api/userdata/workflows%2F<path>.json, refusing to replace
+ * a file unless `overwrite`. The workflow comes inline, or from a local JSON `file` (one get_workflow wrote, edited).
+ */
+export async function saveWorkflow(fetch: Fetch, read: ReadText, base: string, input: SaveWorkflowInput): Promise<Out> {
   const file = workflowFile(input.path)
   if (!file) return fail(BAD_WORKFLOW_PATH)
-  const ui = uiWorkflow(input.workflow)
+  const local = str(input.file)
+  if (local && input.workflow !== undefined) return fail('Give the workflow inline or as a local file, not both.')
+  if (!local && input.workflow === undefined) return fail('Give the workflow inline (workflow) or as a local JSON file (file).')
+  let workflow = input.workflow
+  if (local) {
+    try {
+      workflow = await read(local)
+    } catch (e) {
+      return fail(`Could not read ${local}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    try {
+      JSON.parse(String(workflow))
+    } catch (e) {
+      return fail(`${local} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  const ui = uiWorkflow(workflow)
   if (ui.error !== undefined) return fail(ui.error)
   // The server replaces an existing file unless the query says overwrite=false, so it is always sent.
   const sent = await postJson(fetch, base, `${userdataPath(file)}?overwrite=${input.overwrite === true}&full_info=true`, ui.workflow)
@@ -864,17 +894,29 @@ export async function listWorkflows(fetch: Fetch, base: string): Promise<Out> {
   return ok(`${files.length} workflow${files.length === 1 ? '' : 's'} in workflows/ (the path save_workflow and get_workflow take):\n${lines.join('\n')}`)
 }
 
-export type GetWorkflowInput = { path?: unknown }
+export type GetWorkflowInput = { path?: unknown; file?: unknown }
 
-/** One saved workflow's JSON with GET /api/userdata/workflows%2F<path>.json, compacted, as the base for an edit saved back with save_workflow. */
-export async function getWorkflow(fetch: Fetch, base: string, input: GetWorkflowInput): Promise<Out> {
+/**
+ * One saved workflow's JSON with GET /api/userdata/workflows%2F<path>.json, as the base for an edit saved back with
+ * save_workflow: inline and compact when it fits one answer, else (or when `file` names one) written indented to a local
+ * file, by default comfyui-outputs/workflows/<path>.json, since a cut JSON is no base for an edit.
+ */
+export async function getWorkflow(fetch: Fetch, write: WriteText, base: string, input: GetWorkflowInput): Promise<Out> {
   const file = workflowFile(input.path)
   if (!file) return fail(BAD_WORKFLOW_PATH)
   const got = await getJson(fetch, base, userdataPath(file))
   if (got.error) return got.error.text.includes('answered 404') ? fail(`No workflow at ${file}: list_workflows shows the saved ones.`) : got.error
   const text = JSON.stringify(got.value)
   const head = `Workflow ${file} in UI format; edit it and save it back with save_workflow and overwrite: true.\n`
-  // A cut JSON is no base for an edit, so a workflow past the limit is refused whole rather than cut.
-  if (head.length + text.length > LIMIT) return fail(`${file} is ${text.length} characters as compact JSON, more than the ${LIMIT} one answer carries.`)
-  return ok(head + text)
+  const asked = str(input.file)
+  if (!asked && head.length + text.length <= LIMIT) return ok(head + text)
+  const local = asked ?? `${OUTPUT_DIR}/${file}`
+  try {
+    await write(local, `${JSON.stringify(got.value, null, 2)}\n`)
+  } catch (e) {
+    return fail(`Could not write ${local}: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  return ok(
+    `Workflow ${file} in UI format written to ${local}${asked ? '' : ` (${text.length} characters, more than one answer carries)`}. Read and edit that file, then save it back with save_workflow, file: "${local}" and overwrite: true.`,
+  )
 }

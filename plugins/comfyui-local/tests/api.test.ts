@@ -406,31 +406,36 @@ function rebooting(down: number, extra: Record<string, { status?: number; body: 
   return { fetch, calls }
 }
 
-test('restartServer posts the reboot as JSON, takes the dropped connection as the start and polls until the server answers', async () => {
+test('restartServer posts the reboot as JSON, polls soon after the dropped connection and reports once the server is back', async () => {
   const installed = { 'GET /v2/customnode/installed': { body: { a: { ver: '1', cnr_id: 'a', aux_id: null, enabled: true }, b: { ver: 'x', cnr_id: '', aux_id: 'me/b', enabled: true } } } }
   const { fetch, calls } = rebooting(10, { ...installed, 'POST /v2/customnode/import_fail_info_bulk': { body: { a: null, 'me/b': { error: 'ModuleNotFoundError: no module named onnxruntime\nmore', traceback: '...' } } } })
   const { clock: c, sleeps } = clock()
   const out = await restartServer(fetch, BASE, {}, c)
   expect(out.isError).toBe(false)
-  expect(out.text).toBe('Restarted in 22 s: ComfyUI 0.41.0.\n1 node pack failed to import (the server log has the traceback):\nme/b: ModuleNotFoundError: no module named onnxruntime')
-  expect(sleeps).toEqual(Array(11).fill(2_000))
+  expect(out.text).toBe('Restarted in 21 s: ComfyUI 0.41.0.\n1 node pack failed to import (the server log has the traceback):\nme/b: ModuleNotFoundError: no module named onnxruntime')
+  // the first poll comes soon, to see the re-executed process down, then one every 2 s
+  expect(sleeps).toEqual([500, ...Array(10).fill(2_000)])
   const reboot = calls.find((call) => call.url.endsWith('/v2/manager/reboot'))
   expect(reboot).toEqual({ url: `${BASE}/v2/manager/reboot`, method: 'POST', body: '{}' })
   expect(JSON.parse(calls.at(-1)?.body ?? '')).toEqual({ cnr_ids: ['a'], urls: ['me/b'] })
   // with no import info to read, the answer leaves the packs out
-  expect((await restartServer(rebooting(1).fetch, BASE, {}, clock().clock)).text).toBe('Restarted in 4 s: ComfyUI 0.41.0.')
-  const clean = rebooting(0, { ...installed, 'POST /v2/customnode/import_fail_info_bulk': { body: { a: null, 'me/b': null } } })
-  expect((await restartServer(clean.fetch, BASE, {}, clock().clock)).text).toBe('Restarted in 2 s: ComfyUI 0.41.0.\nNo node pack reports an import error.')
+  expect((await restartServer(rebooting(1).fetch, BASE, {}, clock().clock)).text).toBe('Restarted in 3 s: ComfyUI 0.41.0.')
+  const clean = rebooting(1, { ...installed, 'POST /v2/customnode/import_fail_info_bulk': { body: { a: null, 'me/b': null } } })
+  expect((await restartServer(clean.fetch, BASE, {}, clock().clock)).text).toBe('Restarted in 3 s: ComfyUI 0.41.0.\nNo node pack reports an import error.')
+  // a dropped connection proves nothing alone: an answer before any poll found the server down is the old process
+  const stayed = await restartServer(rebooting(0).fetch, BASE, {}, clock().clock)
+  expect(stayed.isError).toBe(true)
+  expect(stayed.text).toBe('The reboot was sent, but ComfyUI kept running without restarting (see the server log).')
 })
 
 test('restartServer refuses while a job is queued unless forced, and says how many', async () => {
   const busy = { 'GET /queue': { body: { queue_running: [[1, ID, {}, {}, []]], queue_pending: [[2, 'p', {}, {}, []], [3, 'q', {}, {}, []]] } } }
-  const { fetch, calls } = rebooting(0, busy)
+  const { fetch, calls } = rebooting(1, busy)
   const refused = await restartServer(fetch, BASE, {}, clock().clock)
   expect(refused.isError).toBe(true)
   expect(refused.text).toContain('the queue holds 1 running and 2 pending jobs')
   expect(calls.map((call) => call.method)).toEqual(['GET'])
-  expect((await restartServer(fetch, BASE, { force: true }, clock().clock)).text).toBe('Forced past 1 running and 2 pending jobs, which the restart dropped. Restarted in 2 s: ComfyUI 0.41.0.')
+  expect((await restartServer(fetch, BASE, { force: true }, clock().clock)).text).toBe('Forced past 1 running and 2 pending jobs, which the restart dropped. Restarted in 3 s: ComfyUI 0.41.0.')
 })
 
 test('restartServer explains a 403, a missing Manager, a server that never went down and one that never came back', async () => {
@@ -453,7 +458,7 @@ test('restartServer explains a 403, a missing Manager, a server that never went 
   expect((await restartServer(down, BASE, {}, c)).text).toBe(`Could not reach the ComfyUI server at ${BASE}: ECONNREFUSED`)
 })
 
-test('restartServer takes an empty answer followed by the server going down, or a gateway error, as the restart starting', async () => {
+test('restartServer counts an empty answer or a gateway error as a restart only once a poll finds the server down', async () => {
   let polls = 0
   const headers: unknown[] = []
   const answered = (reboot: { status: number; text: string }): Fetch => async (url, init) => {
@@ -464,14 +469,22 @@ test('restartServer takes an empty answer followed by the server going down, or 
     if (path === '/system_stats') return { status: 200, ok: true, text: JSON.stringify(STATS) }
     return { status: 404, ok: false, text: 'not found' }
   }
-  expect((await restartServer(answered({ status: 200, text: '' }), BASE, {}, clock().clock)).text).toBe('Restarted in 6 s: ComfyUI 0.41.0.')
+  // an answered reboot gives the process 2 s to go down before the first poll
+  const { clock: answeredClock, sleeps } = clock()
+  expect((await restartServer(answered({ status: 200, text: '' }), BASE, {}, answeredClock)).text).toBe('Restarted in 6 s: ComfyUI 0.41.0.')
+  expect(sleeps).toEqual([2_000, 2_000, 2_000])
   expect(headers[0]).toEqual({ 'Content-Type': 'application/json' })
-  // behind a proxy, the dropped connection is a 502 and the server may already answer on the first poll
+  // behind a proxy, the dropped connection is a 502; the restart counts once a poll finds the server down
+  polls = 0
+  expect((await restartServer(answered({ status: 502, text: 'Bad Gateway' }), BASE, {}, clock().clock)).text).toBe('Restarted in 5 s: ComfyUI 0.41.0.')
+  // a 504 from a proxy whose Manager hung, with the server still answering, is no restart
   polls = 2
-  expect((await restartServer(answered({ status: 502, text: 'Bad Gateway' }), BASE, {}, clock().clock)).text).toBe('Restarted in 2 s: ComfyUI 0.41.0.')
+  expect((await restartServer(answered({ status: 504, text: 'Gateway Timeout' }), BASE, {}, clock().clock)).text).toContain('kept running without restarting')
 })
 
 const UI = { last_node_id: 1, nodes: [{ id: 1, type: 'SaveImage' }], links: [], version: 0.4 }
+const noRead = async (path: string): Promise<string> => { throw new Error(`no file ${path}`) }
+const noWrite = async (path: string): Promise<void> => { throw new Error(`cannot write ${path}`) }
 const SAVED = '/api/userdata/workflows%2F02%20Pixel%20Art%2FPr%C3%A9dio.json'
 
 test('workflowFile keeps subfolders under workflows/, adds .json and refuses .. and absolute paths', () => {
@@ -495,18 +508,18 @@ test('saveWorkflow posts the UI JSON to the URL-encoded userdata path, never ove
     [`POST ${SAVED}?overwrite=false&full_info=true`]: { body: { path: 'workflows/02 Pixel Art/Prédio.json', size: 81, modified: 1792525594962 } },
     [`POST ${SAVED}?overwrite=true&full_info=true`]: { body: { path: 'workflows/02 Pixel Art/Prédio.json', size: 81, modified: 1792525594962 } },
   })
-  const out = await saveWorkflow(fetch, BASE, { path: '02 Pixel Art/Prédio', workflow: UI })
+  const out = await saveWorkflow(fetch, noRead, BASE, { path: '02 Pixel Art/Prédio', workflow: UI })
   expect(out.text).toBe('Saved workflows/02 Pixel Art/Prédio.json (81 bytes, modified 2026-10-20T19:46:34Z). It shows in the Workflows tab of the ComfyUI frontend once its list is reopened.')
   expect(calls[0]).toEqual({ url: `${BASE}${SAVED}?overwrite=false&full_info=true`, method: 'POST', body: JSON.stringify(UI) })
-  expect((await saveWorkflow(fetch, BASE, { path: '02 Pixel Art/Prédio.json', workflow: JSON.stringify(UI), overwrite: true })).isError).toBe(false)
+  expect((await saveWorkflow(fetch, noRead, BASE, { path: '02 Pixel Art/Prédio.json', workflow: JSON.stringify(UI), overwrite: true })).isError).toBe(false)
   expect(calls[1]?.url).toBe(`${BASE}${SAVED}?overwrite=true&full_info=true`)
-  const taken = await saveWorkflow(server({ [`POST ${SAVED}?overwrite=false&full_info=true`]: { status: 409, body: 'File already exists' } }).fetch, BASE, { path: '02 Pixel Art/Prédio', workflow: UI })
+  const taken = await saveWorkflow(server({ [`POST ${SAVED}?overwrite=false&full_info=true`]: { status: 409, body: 'File already exists' } }).fetch, noRead, BASE, { path: '02 Pixel Art/Prédio', workflow: UI })
   expect(taken.isError).toBe(true)
   expect(taken.text).toBe('workflows/02 Pixel Art/Prédio.json already exists. Read it with get_workflow, then save with overwrite: true to replace it, or choose another path.')
-  const api = await saveWorkflow(fetch, BASE, { path: 'x', workflow: PROMPT })
+  const api = await saveWorkflow(fetch, noRead, BASE, { path: 'x', workflow: PROMPT })
   expect(api.isError).toBe(true)
   expect(api.text).toContain('API format')
-  expect((await saveWorkflow(fetch, BASE, { path: '../x', workflow: UI })).text).toContain('no ".."')
+  expect((await saveWorkflow(fetch, noRead, BASE, { path: '../x', workflow: UI })).text).toContain('no ".."')
   expect(calls.length).toBe(2)
 })
 
@@ -518,14 +531,42 @@ test('listWorkflows lists path, size and date sorted by path, and says when noth
   expect((await listWorkflows(server({ [route]: { body: [] } }).fetch, BASE)).text).toBe('No workflow is saved yet: the workflows/ folder is empty.')
 })
 
-test('getWorkflow reads one saved workflow compacted, says when it is missing and refuses one too large to hand over whole', async () => {
+test('saveWorkflow takes the workflow from a local file instead, never both', async () => {
+  const route = `POST ${SAVED}?overwrite=true&full_info=true`
+  const { fetch, calls } = server({ [route]: { body: { path: 'workflows/02 Pixel Art/Prédio.json', size: 81, modified: 0 } } })
+  const read = async (path: string) => (path === 'comfyui-outputs/w.json' ? JSON.stringify(UI, null, 2) : noRead(path))
+  expect((await saveWorkflow(fetch, read, BASE, { path: '02 Pixel Art/Prédio', file: 'comfyui-outputs/w.json', overwrite: true })).isError).toBe(false)
+  expect(calls[0]?.body).toBe(JSON.stringify(UI))
+  expect((await saveWorkflow(fetch, read, BASE, { path: 'x', file: 'none.json' })).text).toBe('Could not read none.json: no file none.json')
+  expect((await saveWorkflow(fetch, read, BASE, { path: 'x', file: 'comfyui-outputs/w.json', workflow: UI })).text).toBe('Give the workflow inline or as a local file, not both.')
+  expect((await saveWorkflow(fetch, read, BASE, { path: 'x' })).text).toBe('Give the workflow inline (workflow) or as a local JSON file (file).')
+  const broken = async () => '{"nodes": [,'
+  expect((await saveWorkflow(fetch, broken, BASE, { path: 'x', file: 'w.json' })).text).toMatch(/^w\.json is not valid JSON: /)
+  const api = async () => JSON.stringify(PROMPT)
+  expect((await saveWorkflow(fetch, api, BASE, { path: 'x', file: 'w.json' })).text).toContain('API format')
+  expect(calls.length).toBe(1)
+})
+
+test('getWorkflow writes a workflow too large for one answer, or one asked for as a file, to a local file indented', async () => {
+  const written: [string, string][] = []
+  const write = async (path: string, text: string) => void written.push([path, text])
+  const big = { ...UI, notes: 'x'.repeat(LIMIT) }
+  const { fetch } = server({ [`GET ${SAVED}`]: { body: big } })
+  const out = await getWorkflow(fetch, write, BASE, { path: '02 Pixel Art/Prédio' })
+  expect(out.text).toBe(`Workflow workflows/02 Pixel Art/Prédio.json in UI format written to comfyui-outputs/workflows/02 Pixel Art/Prédio.json (${JSON.stringify(big).length} characters, more than one answer carries). Read and edit that file, then save it back with save_workflow, file: "comfyui-outputs/workflows/02 Pixel Art/Prédio.json" and overwrite: true.`)
+  expect(written[0]).toEqual(['comfyui-outputs/workflows/02 Pixel Art/Prédio.json', `${JSON.stringify(big, null, 2)}\n`])
+  const small = server({ [`GET ${SAVED}`]: { body: UI } })
+  expect((await getWorkflow(small.fetch, write, BASE, { path: '02 Pixel Art/Prédio', file: '/tmp/p.json' })).text).toContain('written to /tmp/p.json. Read and edit')
+  expect(written[1]?.[0]).toBe('/tmp/p.json')
+  const failed = await getWorkflow(fetch, noWrite, BASE, { path: '02 Pixel Art/Prédio' })
+  expect(failed.isError).toBe(true)
+  expect(failed.text).toBe('Could not write comfyui-outputs/workflows/02 Pixel Art/Prédio.json: cannot write comfyui-outputs/workflows/02 Pixel Art/Prédio.json')
+})
+
+test('getWorkflow reads one saved workflow compacted and says when it is missing', async () => {
   const { fetch } = server({ [`GET ${SAVED}`]: { body: JSON.stringify(UI, null, 2) } })
-  const out = await getWorkflow(fetch, BASE, { path: '02 Pixel Art/Prédio' })
+  const out = await getWorkflow(fetch, noWrite, BASE, { path: '02 Pixel Art/Prédio' })
   expect(out.text).toBe(`Workflow workflows/02 Pixel Art/Prédio.json in UI format; edit it and save it back with save_workflow and overwrite: true.\n${JSON.stringify(UI)}`)
-  expect((await getWorkflow(fetch, BASE, { path: 'none' })).text).toBe('No workflow at workflows/none.json: list_workflows shows the saved ones.')
-  expect((await getWorkflow(fetch, BASE, { path: '/abs' })).isError).toBe(true)
-  const big = server({ [`GET ${SAVED}`]: { body: { ...UI, notes: 'x'.repeat(LIMIT) } } })
-  const err = await getWorkflow(big.fetch, BASE, { path: '02 Pixel Art/Prédio' })
-  expect(err.isError).toBe(true)
-  expect(err.text).toContain('more than the 60000 one answer carries')
+  expect((await getWorkflow(fetch, noWrite, BASE, { path: 'none' })).text).toBe('No workflow at workflows/none.json: list_workflows shows the saved ones.')
+  expect((await getWorkflow(fetch, noWrite, BASE, { path: '/abs' })).isError).toBe(true)
 })

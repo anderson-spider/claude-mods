@@ -14,11 +14,12 @@ export const ON = { options: { url: URL_OPTION } }
 
 type Settings = Record<string, unknown>
 
-/** A host with a fake ComfyUI behind `http.fetch` (routes as "METHOD path"), curl behind `process.run`, files behind `fs.exists`, settings behind `settings.read` and a fixed `clock.now`. */
-export function world(on: On, opts: { routes?: Record<string, { status?: number; body: unknown }>; user?: Settings; project?: Settings; local?: Settings; files?: string[] } = {}) {
+/** A host with a fake ComfyUI behind `http.fetch` (routes as "METHOD path"), curl behind `process.run`, files behind `fs.exists`, `fs.read` and `fs.write`, settings behind `settings.read` and a fixed `clock.now`. */
+export function world(on: On, opts: { routes?: Record<string, { status?: number; body: unknown }>; user?: Settings; project?: Settings; local?: Settings; files?: string[]; texts?: Record<string, string> } = {}) {
   const tools: Tool[] = []
   const sent: Sent[] = []
   const processes: string[][] = []
+  const written: Record<string, string> = {}
   const host = { ...opts, settingsFail: false }
 
   on('tool.register', (_$, e) => (tools.push(e as unknown as Tool), { value: { tool: id(e.name) } }))
@@ -41,9 +42,15 @@ export function world(on: On, opts: { routes?: Record<string, { status?: number;
     return { value: { exitCode: 0, stdout: JSON.stringify({ name: 'up.png', subfolder: '', type: 'input' }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('fs.exists', (_$, e) => ({ value: (host.files ?? []).includes(e.path) }) as never)
+  on('fs.read', (_$, e) => {
+    const text = host.texts?.[e.path] ?? written[e.path]
+    if (text === undefined) throw new Error(`no file ${e.path}`)
+    return { value: text } as never
+  })
+  on('fs.write', (_$, e) => ((written[e.path] = e.text), { value: undefined }) as never)
   on('clock.now', () => ({ value: 0 }) as never)
 
-  return { tools, sent, processes, host }
+  return { tools, sent, processes, written, host }
 }
 
 /** Starts the session, so the plugin registers its tools, and returns their names. */

@@ -22,7 +22,9 @@ import {
   type Clock,
   type Fetch,
   type Out,
+  type ReadText,
   type Run,
+  type WriteText,
 } from './api'
 import { allOf, type SchemaFor } from './schema'
 
@@ -45,7 +47,7 @@ function accessIo($: EngineInterface): AccessIo {
 }
 
 /** What a tool does once the server is known: the fetch, the process runner, the file check and the clock are the host's, wrapped so the engine's source analysis sees each `$` call. */
-type Work = (host: { fetch: Fetch; run: Run; exists: (path: string) => Promise<boolean>; clock: Clock; base: string }) => Promise<Out>
+type Work = (host: { fetch: Fetch; run: Run; exists: (path: string) => Promise<boolean>; read: ReadText; write: WriteText; clock: Clock; base: string }) => Promise<Out>
 
 /** The host wiring every tool shares: resolves the server from the url option, then runs the tool. `$` is passed only to this top-level function. */
 async function run($: EngineInterface, options: { url?: unknown }, work: Work): Promise<Reply> {
@@ -57,6 +59,8 @@ async function run($: EngineInterface, options: { url?: unknown }, work: Work): 
       fetch: (url, init) => $.http.fetch(url, init),
       run: (argv, init) => $.process.run(argv, init),
       exists: (path) => $.fs.exists(path),
+      read: (path) => $.fs.read(path),
+      write: (path, text) => $.fs.write(path, text),
       // A wait inside a `$` call does not use up the hook's time; `$.clock.sleep` would. Windows has no sleep command.
       clock: {
         sleep: async (ms) => {
@@ -236,10 +240,11 @@ export const register: Register = (on, options) => {
         type: 'object',
         properties: {
           path: { type: 'string', description: WORKFLOW_PATH },
-          workflow: { description: 'The UI-format workflow as a JSON object, or that JSON as a string.' },
+          workflow: { description: 'The UI-format workflow as a JSON object, or that JSON as a string. Omit it when file is given.' },
+          file: { type: 'string', description: 'Instead of workflow: a local JSON file to save, such as the one get_workflow wrote, relative to the working directory or absolute.' },
           overwrite: { type: 'boolean', description: 'Replace a workflow saved at the same path (default false).' },
         },
-        required: ['path', 'workflow'],
+        required: ['path'],
       } satisfies SchemaFor<Inputs['mcp__comfyui-local__save_workflow']>,
     })
     await $.tool.register({
@@ -249,10 +254,14 @@ export const register: Register = (on, options) => {
     })
     await $.tool.register({
       name: 'get_workflow',
-      description: "Read one saved workflow from the user's library as UI-format JSON, as the base to edit and save back with save_workflow and overwrite.",
+      description:
+        "Read one saved workflow from the user's library as UI-format JSON, as the base to edit and save back with save_workflow and overwrite. One too large for an answer is written to a local file instead (comfyui-outputs/workflows/), to edit there and save back with save_workflow file.",
       inputSchema: {
         type: 'object',
-        properties: { path: { type: 'string', description: WORKFLOW_PATH } },
+        properties: {
+          path: { type: 'string', description: WORKFLOW_PATH },
+          file: { type: 'string', description: 'Write the workflow, indented, to this local file instead of answering it, relative to the working directory or absolute.' },
+        },
         required: ['path'],
       } satisfies SchemaFor<Inputs['mcp__comfyui-local__get_workflow']>,
     })
@@ -273,7 +282,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__comfyui-local__manager_search_packs' }, async ($, e) => run($, options, (h) => searchPacks(h.fetch, e)))
   on('tool.call', { tool: 'mcp__comfyui-local__manager_task' }, async ($, e) => run($, options, (h) => runManagerTask(h.fetch, h.base, e, `comfyui-local-${Date.now()}`)))
   on('tool.call', { tool: 'mcp__comfyui-local__restart_server' }, async ($, e) => run($, options, (h) => restartServer(h.fetch, h.base, e, h.clock)))
-  on('tool.call', { tool: 'mcp__comfyui-local__save_workflow' }, async ($, e) => run($, options, (h) => saveWorkflow(h.fetch, h.base, e)))
+  on('tool.call', { tool: 'mcp__comfyui-local__save_workflow' }, async ($, e) => run($, options, (h) => saveWorkflow(h.fetch, h.read, h.base, e)))
   on('tool.call', { tool: 'mcp__comfyui-local__list_workflows' }, async ($) => run($, options, (h) => listWorkflows(h.fetch, h.base)))
-  on('tool.call', { tool: 'mcp__comfyui-local__get_workflow' }, async ($, e) => run($, options, (h) => getWorkflow(h.fetch, h.base, e)))
+  on('tool.call', { tool: 'mcp__comfyui-local__get_workflow' }, async ($, e) => run($, options, (h) => getWorkflow(h.fetch, h.write, h.base, e)))
 }

@@ -112,3 +112,16 @@ test('save_workflow, list_workflows and get_workflow go to the user library thro
   expect(api.isError).toBe(true)
   expect(sent.length).toBe(3)
 })
+
+test('get_workflow and save_workflow round-trip a workflow through a local file with the host file access', ON, async ($, on) => {
+  const file = '/api/userdata/workflows%2Fbig.json'
+  const ui = { nodes: [{ id: 1 }], links: [] }
+  const { tools, sent, written } = world(on, {
+    routes: { [`GET ${file}`]: { body: ui }, [`POST ${file}?overwrite=true&full_info=true`]: { body: { path: 'workflows/big.json', size: 30, modified: 0 } } },
+  })
+  await started($, tools)
+  expect(text(await $.tool.call({ tool: id('get_workflow'), path: 'big', file: '/proj/w/big.json' } as never))).toContain('written to /proj/w/big.json')
+  expect(JSON.parse(written['/proj/w/big.json'] ?? '')).toEqual(ui)
+  expect(text(await $.tool.call({ tool: id('save_workflow'), path: 'big', file: '/proj/w/big.json', overwrite: true } as never))).toContain('Saved workflows/big.json')
+  expect(sent.at(-1)?.body).toBe(JSON.stringify(ui))
+})
