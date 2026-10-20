@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, unlinkSync, writeSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { connect } from 'node:net'
 
@@ -66,24 +66,31 @@ const readBody = request =>
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
- * Takes the lock only one `serve` per home holds: created exclusively, holding this pid. A lock whose process is gone
- * is taken over; one whose process runs is waited for a moment (a daemon that is stopping), then refused.
+ * Takes the lock only one `serve` per home holds. It appears whole, already naming this pid (a hard link of a file
+ * written first), so a reader never sees it empty. A lock whose process is gone is taken over; one whose process runs
+ * is waited for a moment (a daemon that is stopping), then refused while its socket answers. A holder that never
+ * answers on the socket is a pid another process reused after a crash, and its lock is taken over too.
  */
-export async function takeLock(path, pid = process.pid, waitMs = LOCK_WAIT_MS) {
+export async function takeLock(path, { pid = process.pid, waitMs = LOCK_WAIT_MS, socket } = {}) {
   const deadline = Date.now() + waitMs
-  for (;;) {
-    try {
-      const fd = openSync(path, 'wx', 0o600)
-      writeSync(fd, String(pid))
-      closeSync(fd)
-      return
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error
+  const draft = `${path}.${pid}`
+  writeFileSync(draft, String(pid), { mode: 0o600 })
+  try {
+    for (;;) {
+      try {
+        linkSync(draft, path)
+        return
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+      }
+      const holder = Number(readFileSync(path, 'utf8'))
+      if (!holder || !isAlive(holder)) unlinkSync(path)
+      else if (Date.now() < deadline) await sleep(100)
+      else if (socket && !(await isLive(socket))) unlinkSync(path)
+      else throw new Error(`a helper (pid ${holder}) already serves this home`)
     }
-    const holder = Number(readFileSync(path, 'utf8'))
-    if (!holder || !isAlive(holder)) unlinkSync(path)
-    else if (Date.now() >= deadline) throw new Error(`a helper (pid ${holder}) already serves this home`)
-    else await sleep(100)
+  } finally {
+    rmSync(draft, { force: true })
   }
 }
 
@@ -97,7 +104,7 @@ export async function serve({ driver, paths, version, idleMs, exit, log, drainMs
   if (tooLong) throw new Error(tooLong)
   mkdirSync(paths.run, { recursive: true, mode: 0o700 })
   chmodSync(paths.run, 0o700)
-  await takeLock(paths.lock, process.pid, lockWaitMs)
+  await takeLock(paths.lock, { waitMs: lockWaitMs, socket: paths.socket })
   // Only the lock holder touches the socket, so a socket file here is a dead daemon's.
   if (existsSync(paths.socket)) unlinkSync(paths.socket)
 

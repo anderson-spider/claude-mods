@@ -96,7 +96,7 @@ test('a helper that is not running is started through node with its home, then t
 
   expect(typeof browser).toBe('object')
   expect(calls).toEqual([`exists ${installedMarker(HOME)}`, 'post /health', 'node start', 'post /tabs'])
-  expect(runs).toEqual([{ argv: ['node', '/plugin/helper/helper.mjs', 'start', '--home', '/home/u/.claude/chatgpt/playwright'], timeoutMs: 60_000 }])
+  expect(runs).toEqual([{ argv: ['node', '/plugin/helper/helper.mjs', 'start', '--home', '/home/u/.claude/chatgpt/playwright'], timeoutMs: 120_000 }])
   expect(bodies.every(call => call.socketPath === SOCKET)).toBe(true)
 })
 
@@ -129,10 +129,10 @@ test('a start that fails, no node, a missing browser or a launch that fails is t
   const slow = fakeHost()
   slow.host.run = async () => Promise.reject(new Error('the command was still running after 60000 ms'))
   expect(await openPlaywright(slow.host)).toBe(
-    "the helper's start did not finish within 1 minutes or failed: the command was still running after 60000 ms",
+    "the helper's start did not finish within 2 minutes or failed: the command was still running after 60000 ms",
   )
-  const locked = fakeHost({ routes: { '/tabs': { status: 'error', message: 'the ChatGPT login window is still open: close it, then try again' } } })
-  expect(await openPlaywright(locked.host)).toBe('the ChatGPT login window is still open: close it, then try again')
+  const locked = fakeHost({ routes: { '/tabs': { status: 'error', message: 'another Chromium holds the profile (the /chatgpt-login window?): quit it (⌘Q on macOS), then try again' } } })
+  expect(await openPlaywright(locked.host)).toBe('another Chromium holds the profile (the /chatgpt-login window?): quit it (⌘Q on macOS), then try again')
 })
 
 test('the Browser speaks the helper routes: the first listing is reused, scripts come back as a JSON string literal', async () => {

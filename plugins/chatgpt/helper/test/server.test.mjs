@@ -160,8 +160,14 @@ test('a dead daemon leaves a lock and a socket file behind: the next serve takes
 test('the lock is exclusive: a running holder is waited for, then refused', async t => {
   const paths = home(t)
   mkdirSync(paths.run, { recursive: true })
-  await takeLock(paths.lock, process.pid, 0)
-  await assert.rejects(takeLock(paths.lock, 1, 50), /already serves this home/)
+  await takeLock(paths.lock, { waitMs: 0 })
+  assert.equal(readFileSync(paths.lock, 'utf8'), String(process.pid))
+  // A holder that answers on the socket is refused; pid 1 runs but this test's socket answers nothing, so its lock is stale.
+  const { shutdown } = await serve({ driver: fakeDriver().driver, paths: { ...paths, lock: `${paths.lock}.other` }, version: '1', idleMs: 60_000, ...quiet })
+  await assert.rejects(takeLock(paths.lock, { pid: 1, waitMs: 50, socket: paths.socket }), /already serves this home/)
+  await shutdown('test')
+  await takeLock(paths.lock, { pid: 1, waitMs: 50, socket: paths.socket })
+  assert.equal(readFileSync(paths.lock, 'utf8'), '1')
 })
 
 test('a home too long for a Unix socket is refused before listening', async () => {

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { LAUNCH, LOGIN_OPEN, createDriver, userAgentOf } from '../lib/driver.mjs'
+import { PROFILE_BUSY } from '../lib/daemon.mjs'
+import { LAUNCH, createDriver, userAgentOf } from '../lib/driver.mjs'
 
 const HEADLESS_UA = 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36'
 
@@ -89,7 +90,7 @@ test('concurrent first calls share one launch', async () => {
 test('a profile another Chromium holds is the login window, said so', async () => {
   const { chromium } = fakeChromium({ launchError: 'Failed to create a ProcessSingleton for your profile directory.' })
   const driver = createDriver({ chromium, profile: '/p', readFile: async () => Buffer.from(''), instance: 'i' })
-  await assert.rejects(driver.tabs(), { message: LOGIN_OPEN })
+  await assert.rejects(driver.tabs(), { message: PROFILE_BUSY })
 })
 
 test('any other launch failure passes through as it came', async () => {

@@ -1037,11 +1037,11 @@ test('/chatgpt-doctor names the headless Chromium when it is the backend', async
 })
 
 test('a headless Chromium whose browser will not launch is skipped with its reason, and the next backend serves', async ($, on) => {
-  const w = world(on, { playwright: 'ok', launchError: 'the ChatGPT login window is still open: close it, then try again', chrome: 'down' })
+  const w = world(on, { playwright: 'ok', launchError: 'another Chromium holds the profile (the /chatgpt-login window?): quit it (⌘Q on macOS), then try again', chrome: 'down' })
 
   const answer = await commandRun($, 'chatgpt-doctor')
 
-  expect(answer.text).toContain('headless Chromium said: the ChatGPT login window is still open: close it, then try again.')
+  expect(answer.text).toContain('headless Chromium said: another Chromium holds the profile (the /chatgpt-login window?): quit it (⌘Q on macOS), then try again.')
   expect(w.log.slice(0, 4)).toEqual([PW_CHECK, 'helper /health', 'process node helper start', 'helper /tabs'])
 })
 

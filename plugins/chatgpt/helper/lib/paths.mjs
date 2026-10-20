@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process'
 import { readlinkSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 
 // Where the plugin's own browser lives: one folder per user, shared by every session and plugin version. The hooks
@@ -41,17 +43,30 @@ export const isAlive = pid => {
   }
 }
 
+/** The command name of a running process, or '' when there is none. */
+const commandOf = pid => {
+  try {
+    return execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
+}
+
+const HOST = { read: readlinkSync, host: hostname, alive: isAlive, command: commandOf }
+
 /**
- * The pid of the Chromium that holds the profile, from its SingletonLock (a symbolic link to `<host>-<pid>`), when that
- * process is running; undefined when none does.
+ * The pid of the Chromium that holds the profile, from its SingletonLock (a symbolic link to `<host>-<pid>`), when
+ * that is this machine and the process running under that pid is a Chromium; undefined otherwise (a lock a crash left
+ * behind, its pid since reused by another program).
  */
-export function profileHolder(paths, read = readlinkSync) {
+export function profileHolder(paths, host = HOST) {
   let target
   try {
-    target = read(join(paths.profile, 'SingletonLock'))
+    target = String(host.read(join(paths.profile, 'SingletonLock')))
   } catch {
     return undefined
   }
-  const pid = Number(/-(\d+)$/.exec(String(target))?.[1])
-  return pid && isAlive(pid) ? pid : undefined
+  const [, owner, pid] = /^(.*)-(\d+)$/.exec(target) ?? []
+  if (!pid || owner !== host.host() || !host.alive(Number(pid))) return undefined
+  return /chrom/i.test(host.command(Number(pid))) ? Number(pid) : undefined
 }

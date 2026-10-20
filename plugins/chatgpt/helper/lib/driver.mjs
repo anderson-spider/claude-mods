@@ -15,9 +15,6 @@ export const LAUNCH = {
   viewport: { width: 1280, height: 900 },
 }
 
-// What a launch says when the profile is taken: the login window, or a Chromium a daemon left behind.
-export const LOGIN_OPEN = PROFILE_BUSY
-
 // How long a page script may run before its tab is given up on; the plugin's scripts return in seconds.
 export const EVAL_MS = 60_000
 
@@ -67,7 +64,7 @@ export function createDriver({ chromium, profile, readFile, now = Date.now, inst
     try {
       context = await chromium.launchPersistentContext(profile, { ...LAUNCH, userAgent })
     } catch (error) {
-      throw IN_USE.test(String(error?.message)) ? new Error(LOGIN_OPEN) : error
+      throw IN_USE.test(String(error?.message)) ? new Error(PROFILE_BUSY) : error
     }
     for (const page of context.pages()) {
       track(page)

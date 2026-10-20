@@ -105,7 +105,8 @@ export async function openPlaywright(host: PlaywrightHost): Promise<Browser | st
   if (!(await host.exists(installedMarker(home)))) return NOT_SET_UP
   const health = await post(host, home, '/health').catch(() => undefined)
   if (health?.status !== 'ok' || older(String(health.version), host.version)) {
-    const started = await helper(host, home, 'start', 60_000)
+    // Past an older helper's drain and stop (up to 50 s) and the new one's start (up to 10 s).
+    const started = await helper(host, home, 'start', 120_000)
     if (started.status === 'not-installed') return NOT_SET_UP
     if (started.status !== 'ok') return failed(started)
   }
