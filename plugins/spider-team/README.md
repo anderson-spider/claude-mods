@@ -44,7 +44,7 @@ Set them in `/plugin` (or `pluginConfigs["spider-team@spider-claude-mods"].optio
 | `max_workers` | 2 | the most workers that run at once |
 | `planner_effort`, `worker_effort`, `researcher_effort`, `reviewer_effort` | `medium` | the effort the session asks for when it calls that role: `low`, `medium`, `high`, `xhigh` or `max`, all supported by the three 5.5 models |
 | `language` | `auto` | the pane language: `auto` follows the Claude Code language setting, then the system locale; `pt-BR` or `en` fix it |
-| `autoOpen` | `team` | when the pane opens on its own: `team` when a run starts, `any` when a subagent starts with none running, `off` only with `/spider-agents`; a pane you close stays closed for the agents already at work |
+| `autoOpen` | `team` | when the pane opens on its own: `team` when a run starts, `any` when a spider-team agent starts with none running, `off` only with `/spider-agents`; a pane you close stays closed for the agents already at work |
 | `showCost`, `showTokens`, `showContext` | on | the estimated cost, the token counts and the context of each agent |
 | `animations` | on | a spinner beside running agents and a moving rail into the running card; off keeps them still |
 | `historyLimit` | 200 | how many agents the pane remembers (20 to 1000) |
@@ -62,18 +62,18 @@ An invalid pane option falls back to its default. An effort you ask for in the c
 ## Agents pane
 
 - **Pane**: `/spider-agents` toggles it, `/spider-agents open` opens or focuses it, `/spider-agents close` closes it, `/spider-agents clear` forgets the run, the agents and their usage. The run survives `/reload-plugins`, and an open run is saved so a restarted app or a resumed session shows it again. A header with a `SPIDER` badge, the run's title and phase and how many of its agents run, then cards in your theme's colours, joined by a rail that runs while agents work (with `animations` on):
-  - **Session**: Main's model and effort, whether it is working, its context as a gauge and its tokens, then the estimated cost of Main, the subagents and the session, and the run's time.
+  - **Session**: Main's model and effort, whether it is working, its context as a gauge and its tokens, then the estimated cost of Main, spider-team's agents and the session (other agent types are not tracked, so their cost is left out), and the run's time.
   - **Plan**: accepted of the planned tasks and a gauge, then the tasks as a tree (a task hangs under the last task it comes after) with owner and state, the agent on it and its steps, what a blocked task waits for, a failed task's last error and an accepted task's evidence.
   - **Agents · running**: each running agent in its role's colour with its model, one block per attempt at its task (earlier ones green or red), its time and task, then what it is on: effort (planned → actual when they differ; planned is the role's default, since the host does not report the effort a call asked for, so a role effort set in the options below or a rating from subagent-effort shows as a change), steps, latest tools, call count and failed calls, context, tokens and cost.
   - **Agents · finished**: the session's finished agents, newest first, with how long they ran, why a failed one ended and how long ago.
   - **Agents · planned**: the role tasks no agent has taken yet, with the role's model.
-  - **Last 15 minutes**: a lane for Main and each of the four roles, always there and empty while idle, then any other agent type that worked, lit in the minutes it worked.
+  - **Last 15 minutes**: a lane for Main and each of the four roles, always there and empty while idle, lit in the minutes it worked.
 - On the terminal the cards are drawn with box characters; on the desktop as one picture with outlined plates, in light or dark colours by the system's scheme. A pane short of rows leaves out the timeline first, then the finished and the planned agents.
-- **Outside a run** the pane still lists every subagent.
+- **Only spider-team's agents** show in the pane, inside a run or outside one. Other agent types (`Explore`, `general-purpose` and the like) are not tracked, since the host does not report how some of them end and they would stay running in the pane.
 
 ### What it shows and what it does not
 
-Everything comes from the session: the host's per-request token counts, the model and effort each request reported, how each agent's turn ended, and what the session and its agents report through the `progress` and `step` tools. A figure the host never reported is left out (the totals read `N/A`). The pane counts the tools each subagent calls and whether they failed, except calls another plugin's hook answers before this one sees them.
+Everything comes from the session: the host's per-request token counts, the model and effort each request reported, how each agent's turn ended, and what the session and its agents report through the `progress` and `step` tools. A figure the host never reported is left out (the totals read `N/A`). The pane counts the tools each spider-team agent calls and whether they failed, except calls another plugin's hook answers before this one sees them.
 
 - **Cost** is an estimate from token counts and a dated list-price table (`hooks/prices.ts`), with cache writes at the 5-minute rate: a lower bound, never a bill. A model the table does not list has no cost.
 - **Context** is a percent only for the main session, whose window the host reports; a subagent shows its context in tokens.

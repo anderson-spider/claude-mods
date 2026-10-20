@@ -14,11 +14,11 @@ const WORKER: SpiderAgent = {
   costUsd: 0.05, contextTokens: 42_000, contextWindow: 200_000, steps: { done: 2, total: 5, note: 'writing tests' },
   activity: { tools: ['Grep', 'Read', 'Edit'], calls: 9, errors: 1 },
 }
-const EXPLORE: SpiderAgent = { agentId: 'a2', type: 'Explore', status: 'done', startedAt: 0, endedAt: 61_000, lastUpdate: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, requests: 0 }
+const RESEARCHER: SpiderAgent = { agentId: 'a2', type: 'spider-team:spider-researcher', tier: 'researcher', status: 'done', startedAt: 0, endedAt: 61_000, lastUpdate: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, requests: 0 }
 const MAIN: SpiderMain = { model: 'claude-opus-5-5', effort: 'medium', usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0 }, costUsd: 1, contextTokens: 200_000, contextWindow: 500_000, busySince: 0 }
 const all = (lines: Piece[][]) => lines.map(l => l.map(p => p.text).join('')).join('\n')
 type View = Parameters<typeof paneLines>[0]
-const view = (over: Partial<View> = {}): View => ({ run: RUN, agents: [WORKER, EXPLORE], main: MAIN, config: DEFAULTS, columns: 110, lang: 'en', now: 272_000, frame: 0, ...over })
+const view = (over: Partial<View> = {}): View => ({ run: RUN, agents: [WORKER, RESEARCHER], main: MAIN, config: DEFAULTS, columns: 110, lang: 'en', now: 272_000, frame: 0, ...over })
 const draw = (over: Partial<View> = {}) => paneLines(view(over))
 const card = (key: string, over: Partial<View> = {}) => paneModel(view(over)).cards.find(c => c.key === key)
 
@@ -68,12 +68,12 @@ test('an agent shows one block per attempt at its task: earlier ones done or fai
 })
 
 test('finished agents show how they ended, why a failed one did and when, and the card counts what it leaves out', () => {
-  const failed: SpiderAgent = { ...EXPLORE, agentId: 'f', status: 'failed', endReason: 'max_tokens', endedAt: 200_000 }
-  const rows = card('finished', { agents: [WORKER, failed, EXPLORE] })!.lines
+  const failed: SpiderAgent = { ...RESEARCHER, agentId: 'f', status: 'failed', endReason: 'max_tokens', endedAt: 200_000 }
+  const rows = card('finished', { agents: [WORKER, failed, RESEARCHER] })!.lines
   expect(rows[0]![0]).toEqual({ text: '●', style: 'error' })
-  expect(all([rows[0]!])).toMatch(/Explore .*max_tokens · 1 min ago$/)
-  expect(all([rows[1]!])).toMatch(/^● Explore .*01:01 +3 min ago$/)
-  const many = Array.from({ length: 9 }, (_, i) => ({ ...EXPLORE, agentId: `d${i}`, endedAt: 1_000 * i }))
+  expect(all([rows[0]!])).toMatch(/researcher .*max_tokens · 1 min ago$/)
+  expect(all([rows[1]!])).toMatch(/^● researcher .*01:01 +3 min ago$/)
+  const many = Array.from({ length: 9 }, (_, i) => ({ ...RESEARCHER, agentId: `d${i}`, endedAt: 1_000 * i }))
   const lines = card('finished', { agents: many })!.lines
   expect(lines.length).toBe(7)
   expect(all([lines.at(-1)!])).toBe('  +3 more')
@@ -116,20 +116,21 @@ test('a long task title is cut so its owner and state stay in view', () => {
   expect(line).toContain('worker · running')
 })
 
-test("the timeline always has Main and the four roles, idle ones empty, then other types that worked, lit in one-minute buckets, and an axis", () => {
+test("the timeline always has Main and the four roles, idle ones empty, lit in one-minute buckets, and an axis", () => {
   const now = 20 * 60_000
   const main: SpiderMain = { ...MAIN, busySince: undefined, turns: [[6 * 60_000, 7 * 60_000]] }
-  const old = { ...EXPLORE, agentId: 'old', endedAt: 60_000 }
-  const explore = { ...EXPLORE, agentId: 'e', startedAt: 15 * 60_000, endedAt: 16 * 60_000 }
-  const lines = card('timeline', { now, main, agents: [{ ...WORKER, startedAt: 18 * 60_000 }, old, explore] })!.lines
-  expect(lines.map(l => l[0]!.text.trim())).toEqual(['main', 'planner', 'worker', 'researcher', 'reviewer', 'Explore', ''])
+  const old = { ...RESEARCHER, agentId: 'old', endedAt: 60_000 }
+  const researcher = { ...RESEARCHER, agentId: 'e', startedAt: 15 * 60_000, endedAt: 16 * 60_000 }
+  const lines = card('timeline', { now, main, agents: [{ ...WORKER, startedAt: 18 * 60_000 }, old, researcher] })!.lines
+  expect(lines.map(l => l[0]!.text.trim())).toEqual(['main', 'planner', 'worker', 'researcher', 'reviewer', ''])
   expect(lines[4]!.map(p => [p.style, p.tone])).toEqual([['plain', 'planMode'], ['barEmpty', undefined]])
   expect(lines[0]![0]!.tone).toBe('claude')
   const cw = (110 - FRAME - 12) / 15 | 0
   expect(all([lines[0]!]).slice(12)).toBe(`${'·'.repeat(cw)}${'━'.repeat(cw)}${'·'.repeat(13 * cw)}`)
   expect(all([lines[2]!]).slice(12).endsWith(`${'·'.repeat(cw)}${'━'.repeat(2 * cw)}`)).toBe(true)
   expect(lines[2]!.find(p => p.text.includes('━'))!.tone).toBe('suggestion')
-  expect(all([lines[6]!])).toMatch(/^ +−15m +now$/)
+  expect(all([lines[3]!]).slice(12)).toBe(`${'·'.repeat(10 * cw)}${'━'.repeat(cw)}${'·'.repeat(4 * cw)}`)
+  expect(all([lines[5]!])).toMatch(/^ +−15m +now$/)
   const quiet = card('timeline', { now: 60 * 60_000, main: { ...MAIN, busySince: undefined }, agents: [old] })!.lines
   expect(quiet.map(l => l[0]!.text.trim())).toEqual(['main', 'planner', 'worker', 'researcher', 'reviewer', ''])
 })
@@ -148,7 +149,7 @@ test('the spinner and the rail move only while agents run with animations on', (
   const still = view({ frame: 1, config: { ...DEFAULTS, animations: false } })
   expect(all(paneLines(still))).not.toContain('⠙')
   expect(paneModel(still).motion).toBe(false)
-  expect(paneModel(view({ agents: [EXPLORE] })).motion).toBe(false)
+  expect(paneModel(view({ agents: [RESEARCHER] })).motion).toBe(false)
 })
 
 test('short of rows the pane drops the timeline first, then the finished and the planned agents', () => {

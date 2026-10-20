@@ -1,19 +1,19 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent, SpiderRun } from '../types'
-import { TOOLS_KEPT, agentEnded, agentStepped, agentsOfRun, answeredModel, capped, missedEndings, resumed, spawned, stepReported, toolName, toolUsed } from '../hooks/agents'
+import { TOOLS_KEPT, agentEnded, agentStepped, agentsOfRun, answeredModel, capped, missedEndings, resumed, roleAgents, spawned, stepReported, toolName, toolUsed } from '../hooks/agents'
 import { STEP_BRIEF, TIERS, briefed, taskIdOf, tierOf } from '../hooks/tiers'
 
 const BRIEF = 'spider-task: T3\nRead the auth module.'
 const spawn = (list: SpiderAgent[] = [], agentId = 'a1', type = 'spider-team:spider-worker', prompt = BRIEF) => spawned(list, { agentId, type, model: 'claude-sonnet-5-5', prompt, now: 100 }, 200)
 const USAGE = { model: 'claude-sonnet-5-5', input_tokens: 1_000, output_tokens: 200, cache_read_input_tokens: 9_000, cache_creation_input_tokens: 500 }
 
-test('a spider spawn binds its task id and planned effort; any other agent is tracked with neither', () => {
+test('a spider spawn binds its task id and planned effort; any other agent type is not tracked', () => {
   const [spider] = spawn()
   expect(spider).toMatchObject({ agentId: 'a1', tier: 'worker', taskId: 'T3', plannedEffort: 'medium', model: 'claude-sonnet-5-5', status: 'running', startedAt: 100, requests: 0 })
-  const [other] = spawn([], 'a2', 'Explore', 'Find the router.')
-  expect(other!.tier).toBeUndefined()
-  expect(other!.taskId).toBeUndefined()
-  expect(other!.plannedEffort).toBeUndefined()
+  for (const type of ['Explore', 'general-purpose', 'claude', undefined]) expect(spawned([], { agentId: 'a2', type, prompt: 'Find the router.', now: 100 }, 200)).toEqual([])
+  const [researcher] = spawn([], 'a3', 'spider-team:spider-researcher', 'Find the router.')
+  expect(researcher).toMatchObject({ tier: 'researcher', plannedEffort: 'medium' })
+  expect(researcher!.taskId).toBeUndefined()
   const list = spawn()
   expect(spawn(list)).toEqual(list)
 })
@@ -99,7 +99,7 @@ test('usage taken from the turn end leaves the context unknown, since it sums ev
 })
 
 test('the run counts agents started while it was open and workers its tasks list, never older or later ones', () => {
-  const at = (agentId: string, now: number, list: SpiderAgent[]) => spawned(list, { agentId, type: 'Explore', prompt: 'Find it.', now }, 200)
+  const at = (agentId: string, now: number, list: SpiderAgent[]) => spawned(list, { agentId, type: 'spider-team:spider-researcher', prompt: 'Find it.', now }, 200)
   const list = at('late', 900, at('during', 500, at('resumed', 50, at('before', 10, []))))
   const run: SpiderRun = { runId: 'r', title: 'Auth', phase: 'complete', startedAt: 100, finishedAt: 800, tasks: [
     { id: 'T1', title: 'Read', owner: 'worker', after: [], state: 'completed', attempts: 1, errors: [], agentIds: ['resumed'] },
@@ -126,7 +126,7 @@ test('answeredModel prefers the model the usage names, else the fallback', () =>
 })
 
 test('the run counts an agent that started exactly when it opened or when it finished', () => {
-  const at = (agentId: string, now: number, list: SpiderAgent[]) => spawned(list, { agentId, type: 'Explore', prompt: 'Find it.', now }, 200)
+  const at = (agentId: string, now: number, list: SpiderAgent[]) => spawned(list, { agentId, type: 'spider-team:spider-researcher', prompt: 'Find it.', now }, 200)
   const list = at('after', 801, at('end', 800, at('start', 100, at('before', 99, []))))
   const run: SpiderRun = { runId: 'r', title: 'Auth', phase: 'complete', startedAt: 100, finishedAt: 800, tasks: [] }
   expect(agentsOfRun(run, list).map(a => a.agentId)).toEqual(['start', 'end'])
@@ -161,4 +161,11 @@ test("a reload's missed endings: an agent the host lists as done, failed or kill
   const list = [running('a'), running('b'), running('c'), running('d'), running('gone'), { ...running('old'), status: 'done' as const }]
   const host = [{ id: 'a', status: 'running' }, { id: 'b', status: 'completed' }, { id: 'c', status: 'failed' }, { id: 'd', status: 'killed' }, { id: 'old', status: 'completed' }]
   expect(missedEndings(list, host)).toEqual([{ agentId: 'b', reason: 'answer' }, { agentId: 'c', reason: 'error' }, { agentId: 'd', reason: 'aborted' }, { agentId: 'gone', reason: 'aborted' }])
+})
+
+test('roleAgents drops the agent types older code tracked and keeps the role agents', () => {
+  const list = spawn()
+  expect(roleAgents(list)).toBe(list)
+  const generic: SpiderAgent = { agentId: 'g', type: 'Explore', status: 'running', startedAt: 0, lastUpdate: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, requests: 0 }
+  expect(roleAgents([generic, ...list])).toEqual(list)
 })

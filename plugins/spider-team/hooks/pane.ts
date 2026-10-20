@@ -1,5 +1,5 @@
 // The /spider-agents pane as cards: a header with the run and how many agents run, then a card for the session (Main's
-// model, context and cost), the plan as a tree, the agents running, finished and planned, and the last 15 minutes by
+// model, context and cost), the plan as a tree, the role agents running, finished and planned, and the last 15 minutes by
 // role, and a footer. Each card has a tone (a theme colour), a title with a count, an aside and its lines; the
 // renderers draw the borders and the rails between cards. Figures the host never reported are left out. Pure.
 import type { SpiderAgent, SpiderMain, SpiderRun, SpiderTask, SpiderTier } from '../types'
@@ -42,7 +42,7 @@ const CARD_TONE: Record<CardKey, Tone> = { session: 'claude', plan: 'suggestion'
 const ROLE_TONE: Record<SpiderTier | 'main', Tone> = { main: 'claude', planner: 'merged', worker: 'suggestion', researcher: 'warning', reviewer: 'planMode' }
 const ROLES: (SpiderTier | 'main')[] = ['main', 'planner', 'worker', 'researcher', 'reviewer']
 
-const nameOf = (a: SpiderAgent) => a.tier ?? (a.type?.replace(/^.*:/, '') || 'agent')
+const nameOf = (a: SpiderAgent) => a.tier ?? 'agent'
 const toneOf = (role: string): Tone => ROLE_TONE[role as SpiderTier] ?? 'inactive'
 const sent = (u: SpiderAgent['usage']) => u.input + u.cacheRead + u.cacheWrite
 const width = (line: Piece[]) => line.reduce((n, piece) => n + cells(piece.text), 0)
@@ -213,7 +213,7 @@ function listed(agents: SpiderAgent[], s: Strings, row: (a: SpiderAgent) => Piec
   return [...agents.slice(0, LISTED).map(row), ...(extra > 0 ? [[p(`  ${fill(s.pane.more, extra)}`, 'dim')]] : [])]
 }
 
-/** A lane per role across the last 15 minutes in one-minute buckets, lit where it worked: Main and spider-team's four roles always, idle ones empty, then other agent types that worked. */
+/** A lane per role across the last 15 minutes in one-minute buckets, lit where it worked: Main and spider-team's four roles, always there, idle ones empty. */
 function timelineLines(v: PaneView, s: Strings, inner: number): Piece[][] {
   const from = v.now - TIMELINE_MS
   const cw = Math.floor((inner - LANE_LABEL) / BUCKETS)
@@ -223,7 +223,7 @@ function timelineLines(v: PaneView, s: Strings, inner: number): Piece[][] {
   for (const turn of v.main.turns ?? []) add('main', turn)
   if (v.main.busySince !== undefined) add('main', [v.main.busySince, v.now])
   for (const a of v.agents) add(nameOf(a), [a.startedAt, a.endedAt ?? v.now])
-  const lanes = [...ROLES, ...[...spans.keys()].filter(lane => !ROLES.includes(lane as SpiderTier)).sort()]
+  const lanes = [...ROLES]
   const rows = lanes.map(lane => {
     const lit = Array.from({ length: BUCKETS }, (_, i) => {
       const [start, end] = [from + i * 60_000, from + (i + 1) * 60_000]
