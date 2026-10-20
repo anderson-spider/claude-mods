@@ -6,7 +6,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 
 | Plugin | What it does |
 | --- | --- |
-| [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
+| [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in its own headless Chromium (or terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser), and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [comfyui-local](plugins/comfyui-local/README.md) | Lets Claude generate images, video, audio and 3D on your self-hosted ComfyUI, search its nodes, models and templates, and manage node packs through ComfyUI-Manager, with the server in the `url` option. Unofficial; its slash commands are ported from Comfy-Org/comfy-skills. |
 | [coolify](plugins/coolify/README.md) | Lets Claude read your Coolify instance and create, deploy or delete projects and resources through its API, with the instance in the `url` option and the token in the sensitive `apiKey` option. |
@@ -83,7 +83,7 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 | `npm run check [-- <name>]` | The required CI checks in one run: the version bump of committed and uncommitted changes against `origin/main` as last fetched, then `plugins:validate`, `plugins:test` and `typecheck`, for every plugin or one. Every step runs, and a summary names the failed ones. |
 | `npm run plugins:validate [-- <name>]` | `validate --strict` the marketplace and every plugin, or one plugin, then `check-consistency`. |
 | `npm run typecheck [-- <name>]` | Run the pinned `tsc` on one plugin, or every plugin with TypeScript; a plugin without typings gets them copied from the main checkout, else generated (`plugins:types`). |
-| `npm run plugins:test [-- <name>]` | Script tests, every plugin's tests and, with the ChatGPT app installed, the codex-computer-use helper tests; with a name, only that plugin's tests. |
+| `npm run plugins:test [-- <name>]` | Script tests, every plugin's tests, the chatgpt helper tests and, with the ChatGPT app installed, the codex-computer-use helper tests; with a name, only that plugin's tests. |
 | `npm run plugins:scan` | Save each plugin's `validate --strict` output under `.scan/` to diff before and after a refactor. |
 | `npm run plugins:sync` | Refresh the marketplace, then update every installed plugin it lists and uninstall those it no longer lists, each in its own scope. |
 | `npm run update:all` | Pull `main`, run `npm ci` and `plugins:sync` (main checkout only). |

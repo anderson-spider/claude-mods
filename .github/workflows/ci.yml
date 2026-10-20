@@ -27,6 +27,8 @@ jobs:
         run: node --test scripts/*.test.mjs
       - name: codex-computer-use helper tests
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
+      - name: chatgpt helper tests
+        run: node --test plugins/chatgpt/helper/test/*.test.mjs
 
   # Neither command logs in. The typings tsc needs are written by an interactive session, which starts without a login.
   # The pinned row, with the CLI package.json pins, is the required `plugins` check; the latest row shows early what a

@@ -108,6 +108,18 @@ test('prepare on a page that is not ready names the browsers it was given, and q
   })
 })
 
+test("prepare on a logged-out page of a backend with its own sign-in says that sign-in instead of the general advice", async () => {
+  const { browser } = recording({ tabs: ['seed'], pages: [{ composer: false, login: true, href: 'https://chatgpt.com/auth/login' }] })
+  browser.signIn = 'Ask the user to run /sign-in, then try again.'
+  const result = await prepare(browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: ['terminal-browser'] })
+
+  expect(result).toEqual({
+    ok: false,
+    url: 'https://chatgpt.com/auth/login',
+    error: 'ChatGPT is not ready in the browser (at https://chatgpt.com/auth/login). Ask the user to run /sign-in, then try again.',
+  })
+})
+
 test('prepare on a page outside chatgpt.com is not ready, whatever the composer shows', async () => {
   const { browser } = recording({ tabs: ['seed'], pages: [{ href: 'https://example.com/', composer: true }] })
   const result = await prepare(browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: [] })

@@ -6,11 +6,12 @@ import { limitMs } from './settings'
 import type { Browser, Outcome, ProcessRunner, Request, RequestDeps, TabHolder } from './model'
 import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
 import { PROMPT } from './prompts'
-import { DOCTOR_COMMAND_DESCRIPTION, TOOLS } from './tool-schemas'
+import { DOCTOR_COMMAND_DESCRIPTION, LOGIN_COMMAND_DESCRIPTION, TOOLS } from './tool-schemas'
 import { type Candidate, chooseBrowser } from './chooser'
 import { type Backend, backendsFor, ownCallAllowed } from './backends'
 import { type McpCall, type McpHost, mcpCallOf } from './mcp-call'
 import type { BrowserDeps } from './page-browser'
+import { type PlaywrightHost, signIn } from './playwright-browser'
 import { bytesOf } from './upload'
 import { serve } from './tools'
 
@@ -58,6 +59,21 @@ function callOf($: EngineInterface, server: string): McpCall {
   return call
 }
 
+// The plugin's version, which the headless Chromium's helper must match; read from plugin.json once per load.
+let pluginVersion: string | undefined
+
+async function playwrightHostOf($: EngineInterface): Promise<PlaywrightHost> {
+  pluginVersion ??= (JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version: string }).version
+  return {
+    fetch: (url, init) => $.http.fetch(url, init),
+    run: processOf($),
+    exists: path => $.fs.exists(path),
+    home: await $.env.get('HOME'),
+    root: $.plugin.root,
+    version: pluginVersion,
+  }
+}
+
 // The backends in this session's order (see backendsFor).
 async function backendsOf($: EngineInterface): Promise<Backend[]> {
   return backendsFor(await $.env.get('CLAUDE_CODE_ENTRYPOINT'))
@@ -75,11 +91,11 @@ function candidatesOf($: EngineInterface, backends: Backend[]): Candidate[] {
     },
     now: () => Date.now(),
   })
-  return backends.map(backend =>
-    'server' in backend
-      ? { name: backend.name, hint: backend.hint, open: () => backend.open(deps(backend.server)) }
-      : { name: backend.name, hint: backend.hint, open: () => backend.open(run) },
-  )
+  return backends.map(backend => {
+    if ('server' in backend) return { name: backend.name, hint: backend.hint, open: () => backend.open(deps(backend.server)) }
+    if ('helper' in backend) return { name: backend.name, hint: backend.hint, open: async () => backend.open(await playwrightHostOf($)) }
+    return { name: backend.name, hint: backend.hint, open: () => backend.open(run) }
+  })
 }
 
 // Picks the backend, and starts the plugin's tab afresh when it differs from the one that opened that tab.
@@ -167,6 +183,7 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'chatgpt-ask', description: TOOLS.ask.command.description })
     await $.command.register({ name: 'chatgpt-image', description: TOOLS.image.command.description })
     await $.command.register({ name: 'chatgpt-doctor', description: DOCTOR_COMMAND_DESCRIPTION })
+    await $.command.register({ name: 'chatgpt-login', description: LOGIN_COMMAND_DESCRIPTION })
     return next(e)
   })
 
@@ -196,6 +213,19 @@ export const register: Register = (on, options) => {
     const outcome = await handlers($).runNow(request)
     return imageCommandAnswer(outcome)
   })
+
+  // Signing in stops the helper, so it waits for the requests queued before it, and the plugin's tab starts afresh.
+  on('command.run', { command: 'chatgpt-login' }, async $ =>
+    queue(async () => {
+      $.ui.status('ChatGPT: preparing the headless Chromium (the first run downloads it)')
+      try {
+        tab.id = undefined
+        return { text: await signIn(await playwrightHostOf($)) }
+      } finally {
+        $.ui.status(undefined)
+      }
+    }),
+  )
 
   on('command.run', { command: 'chatgpt-doctor' }, async ($, e) => {
     const chatUrl = chatUrlOf(e.args)

@@ -2,15 +2,17 @@ import type { Browser, ProcessRunner, TabHolder } from './model'
 import { BUILTIN_SPEC } from './builtin-browser'
 import { CHROME_SPEC } from './chrome-browser'
 import { type McpBackend, mcpBackend } from './mcp-backend'
+import { PLAYWRIGHT, PLAYWRIGHT_HINT, type PlaywrightHost, openPlaywright } from './playwright-browser'
 import { TERMINAL_BROWSER, openTerminalBrowser } from './terminal-browser'
 
 /** The plugin's own name: the origin the host reports for its calls. */
 const PLUGIN = 'chatgpt'
 
-// A backend: terminal-browser runs as a host process; the others are MCP servers (see `mcpBackend`), whose `stays` says
-// which of the plugin's own calls to them stay on chatgpt.com. Every backend's `hint` is its setup advice, which the
-// chooser strings together when none works.
+// A backend: the plugin's headless Chromium is its own helper process (`helper`); terminal-browser runs as a host
+// process; the others are MCP servers (see `mcpBackend`), whose `stays` says which of the plugin's own calls to them
+// stay on chatgpt.com. Every backend's `hint` is its setup advice, which the chooser strings together when none works.
 export type Backend =
+  | { name: string; hint: string; helper: true; open(host: PlaywrightHost): Promise<Browser | string> }
   | { name: string; hint: string; open(run: ProcessRunner): Promise<Browser | string> }
   | McpBackend
 
@@ -21,9 +23,10 @@ export type Backend =
  * `tests/backends.test.ts`.
  */
 export const BACKENDS: Backend[] = [
+  { name: PLAYWRIGHT, hint: PLAYWRIGHT_HINT, helper: true, open: openPlaywright },
   {
     name: TERMINAL_BROWSER,
-    hint: 'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh)',
+    hint: 'run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh)',
     open: openTerminalBrowser,
   },
   mcpBackend(CHROME_SPEC),
@@ -33,11 +36,14 @@ export const BACKENDS: Backend[] = [
 /** What the Claude desktop app sets `CLAUDE_CODE_ENTRYPOINT` to. */
 export const DESKTOP_ENTRYPOINT = 'claude-desktop'
 
-/** BACKENDS in the order to try them in a session started from `entrypoint`: inside the desktop app, its built-in browser first. */
+/**
+ * BACKENDS in the order to try them in a session started from `entrypoint`: the plugin's headless Chromium first
+ * everywhere, then, inside the desktop app, its built-in browser before the others.
+ */
 export function backendsFor(entrypoint: string | undefined): Backend[] {
   if (entrypoint !== DESKTOP_ENTRYPOINT) return BACKENDS
-  const builtin = (backend: Backend) => backend.name === BUILTIN_SPEC.name
-  return [...BACKENDS.filter(builtin), ...BACKENDS.filter(backend => !builtin(backend))]
+  const rank = (backend: Backend) => (backend.name === PLAYWRIGHT ? 0 : backend.name === BUILTIN_SPEC.name ? 1 : 2)
+  return [...BACKENDS].sort((a, b) => rank(a) - rank(b))
 }
 
 export type OwnCall = { prefix: string; stays: (tool: string, input: unknown, tabId: string | undefined) => boolean }

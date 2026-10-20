@@ -7,6 +7,7 @@ import {
   IMAGE_INPUT_SCHEMA,
   JOBS_DESCRIPTION,
   JOBS_INPUT_SCHEMA,
+  LOGIN_COMMAND_DESCRIPTION,
   TOOLS,
   type ToolDef,
 } from '../hooks/tool-schemas'
@@ -60,6 +61,10 @@ test('DOCTOR_COMMAND_DESCRIPTION is pinned byte for byte', () => {
   expect(DOCTOR_COMMAND_DESCRIPTION).toBe(
     'Diagnose ChatGPT login and page selectors: /chatgpt-doctor [chat URL]',
   )
+})
+
+test('LOGIN_COMMAND_DESCRIPTION is pinned byte for byte', () => {
+  expect(LOGIN_COMMAND_DESCRIPTION).toBe("Sign in to ChatGPT in the plugin's headless Chromium (installs it the first time): /chatgpt-login")
 })
 
 test('ASK_INPUT_SCHEMA is pinned byte for byte', () => {
