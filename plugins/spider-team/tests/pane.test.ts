@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent, SpiderMain, SpiderRun, SpiderTask } from '../types'
 import { DEFAULTS } from '../hooks/config'
-import { FRAME, paneLines, paneModel, rowsOf } from '../hooks/pane'
+import { FRAME, idRanges, paneLines, paneModel, rowsOf } from '../hooks/pane'
 import type { Piece } from '../hooks/text'
 
 const RUN: SpiderRun = {
@@ -98,22 +98,32 @@ test('the plan card counts accepted tasks, draws a gauge and is a tree: blocked 
   const plan = card('plan', { run })!
   expect(plan.count).toBe('1/5')
   expect(all([plan.aside])).toBe('✗ 1  ▰▱▱▱▱▱ 20%')
-  const rows = all(plan.lines).split('\n')
-  expect(rows[0]).toBe('✓ T1 Task T1  worker · accepted')
-  expect(rows[1]).toBe('│  tests pass')
-  expect(rows).toContain('├─ ✗ T3 Task T3  worker · failed')
-  expect(rows).toContain('│  └─ ○ T2 Task T2  worker · blocked  waits T3')
-  expect(rows.some(r => r.includes('timed out'))).toBe(true)
-  expect(rows).toContain('└─ ◎ T4 Task T4  worker · running (2/5)  ← worker')
-  expect(rows.some(r => r.includes('T5'))).toBe(false)
-  expect(rows).toContain('– T6 Task T6  worker · cancelled')
+  expect(all(plan.lines).split('\n')).toEqual([
+    '✓ T1 Task T1',
+    '│    worker · accepted',
+    '│    tests pass',
+    '├─ ✗ T3 Task T3',
+    '│  │    worker · failed',
+    '│  │    timed out',
+    '│  └─ ○ T2 Task T2',
+    '│          worker · blocked  waits T3',
+    '└─ ◎ T4 Task T4',
+    '        worker · running (2/5)  ← worker',
+    '– T6 Task T6',
+    '     worker · cancelled',
+  ])
 })
 
-test('a long task title is cut so its owner and state stay in view', () => {
-  const run = { ...RUN, tasks: [{ ...RUN.tasks[0]!, title: 'x'.repeat(200) }] }
-  const line = all(card('plan', { run, columns: 60 })!.lines.slice(0, 1))
-  expect(line).toContain('…')
-  expect(line).toContain('worker · running')
+test('a long title wraps to two lines under itself and then is cut, its owner and state on a line of their own', () => {
+  const words = Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ')
+  const run = { ...RUN, tasks: [{ ...RUN.tasks[0]!, title: words, errors: [`error ${'x'.repeat(200)}`] }] }
+  const lines = card('plan', { run, columns: 60 })!.lines.map(l => all([l]))
+  expect(lines).toHaveLength(5)
+  expect(lines[0]).toBe('◎ T1 word0 word1 word2 word3 word4 word5 word6 word7')
+  expect(lines[1]).toMatch(/^ {5}word8 .*…$/)
+  expect(lines[2]).toBe('     worker · running (2/5)  ← worker')
+  expect(lines[3]).toBe(`     error`)
+  expect(lines[4]).toMatch(/^ {5}x+…$/)
 })
 
 test("the timeline always has Main and the four roles, idle ones empty, lit in one-minute buckets, and an axis", () => {
@@ -161,10 +171,24 @@ test('short of rows the pane drops the timeline first, then the finished and the
   expect(keys(1)).toEqual(['session', 'plan', 'running'])
 })
 
+test('short of rows the accepted tasks fold into one line with their ids as ranges, before any card is dropped', () => {
+  const task = (id: string, state: SpiderTask['state'], after: string[] = []): SpiderTask => ({ id, title: `Task ${id}`, owner: 'main', after, state, attempts: 1, errors: [], agentIds: [], ...(state === 'completed' ? { evidence: 'ok' } : {}) })
+  const run: SpiderRun = { ...RUN, tasks: [task('T1', 'completed'), task('T2', 'completed', ['T1']), task('T3', 'completed'), task('T5', 'completed'), task('T4', 'pending', ['T2'])] }
+  const full = paneModel(view({ run }))
+  expect(all(full.cards.find(c => c.key === 'plan')!.lines)).toContain('✓ T1 Task T1')
+  const short = paneModel(view({ run, rows: rowsOf(full.cards) - 1 }))
+  expect(short.cards.map(c => c.key)).toContain('timeline')
+  expect(all(short.cards.find(c => c.key === 'plan')!.lines).split('\n')).toEqual(['✓ 4 accepted  T1–T3, T5', '○ T4 Task T4', '     main · pending'])
+  expect(all(card('plan', { run, rows: 1, lang: 'pt-BR' })!.lines)).toContain('✓ 4 aceitas  T1–T3, T5')
+  const one: SpiderRun = { ...run, tasks: [task('T1', 'completed'), task('T2', 'pending', ['T1'])] }
+  expect(all(card('plan', { run: one, rows: 1, lang: 'pt-BR' })!.lines)).toContain('✓ 1 aceita  T1')
+  expect(idRanges(['T10', 'T2', 'T9', 'x', 'T3'])).toBe('T2–T3, T9–T10, x')
+})
+
 test('tasks the run cancelled stay in the plan counts', () => {
   const task = (id: string, state: SpiderTask['state']): SpiderTask => ({ id, title: id, owner: 'main', after: [], state, attempts: 1, errors: [], agentIds: [] })
   const run: SpiderRun = { ...RUN, phase: 'cancelled', tasks: [task('T1', 'completed'), { ...task('T2', 'cancelled'), cancelledWithRun: true }, task('T3', 'cancelled')] }
   const plan = card('plan', { run, agents: [] })!
   expect(plan.count).toBe('1/2')
-  expect(all(plan.lines)).toContain('– T2 T2  main · cancelled')
+  expect(all(plan.lines)).toContain('– T2 T2\n     main · cancelled')
 })

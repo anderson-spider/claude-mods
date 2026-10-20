@@ -10,12 +10,12 @@ import { formatCost, formatDuration, formatTokens, totalsOf } from './metrics'
 import { agentsOfRun } from './agents'
 import { effectiveState, isPlanned } from './state'
 import { TIERS } from './tiers'
-import { SPINNER, cells, cut, fit, modelName, p, pad, toned } from './text'
+import { SPINNER, cells, cut, fit, modelName, p, pad, toned, wrap } from './text'
 import type { Piece, Style, Tone } from './text'
 
 export type PaneView = {
   run: SpiderRun | null; agents: SpiderAgent[]; main: SpiderMain; config: SpiderConfig; columns: number; lang: Lang; now: number; frame: number
-  /** The rows the pane has; when the cards need more, the timeline goes first, then the finished and the planned agents. */
+  /** The rows the pane has; when the cards need more, the accepted tasks fold into one line, then the timeline goes, then the finished and the planned agents. */
   rows?: number
 }
 
@@ -112,16 +112,34 @@ function planProgress(run: SpiderRun): { count: string; aside: Piece[] } {
   return { count: `${accepted}/${states.length}`, aside: [...(failed ? [p(`✗ ${failed}  `, 'error')] : []), ...gauge(pct, 6, 'success'), p(` ${pct}%`, 'dim')] }
 }
 
+/** Task ids as ranges of consecutive numbers: `T1–T3, T5`; an id not in the `T<n>` form as it is. */
+export function idRanges(ids: string[]): string {
+  const numbered = ids.map(id => ({ id, n: /^T(\d+)$/.exec(id) ? Number(id.slice(1)) : NaN }))
+  const sorted = numbered.filter(x => !Number.isNaN(x.n)).sort((a, b) => a.n - b.n)
+  const ranges: string[] = []
+  for (let i = 0; i < sorted.length; i++) {
+    let end = i
+    while (end + 1 < sorted.length && sorted[end + 1]!.n === sorted[end]!.n + 1) end++
+    ranges.push(end > i ? `${sorted[i]!.id}–${sorted[end]!.id}` : sorted[i]!.id)
+    i = end
+  }
+  return [...ranges, ...numbered.filter(x => Number.isNaN(x.n)).map(x => x.id)].join(', ')
+}
+
 /**
- * The plan as a tree: a task hangs under the last task it comes after. Each line: its mark, id and title, owner and
- * state, the agent on it with its steps, or the tasks it waits for; then its error or, once accepted, its evidence.
+ * The plan as a tree: a task hangs under the last task it comes after. Each task: its mark, id and title in up to two
+ * lines; a line with its owner and state, the agent on it with its steps, or the tasks it waits for; then its error or,
+ * once accepted, its evidence in up to two lines. The lines under the first start where the title does. `fold` puts the
+ * accepted tasks in one line on top, their ids as ranges, and the tree holds the rest.
  */
-function planLines(run: SpiderRun, v: PaneView, s: Strings, inner: number): Piece[][] {
-  const tasks = run.tasks.filter(isPlanned)
+function planLines(run: SpiderRun, v: PaneView, s: Strings, inner: number, fold = false): Piece[][] {
+  const planned = run.tasks.filter(isPlanned)
+  const accepted = fold ? planned.filter(task => effectiveState(run, task) === 'completed') : []
+  const tasks = planned.filter(task => !accepted.includes(task))
   const ids = new Set(tasks.map(task => task.id))
   const parentOf = (task: SpiderTask) => [...task.after].reverse().find(id => ids.has(id) && id !== task.id)
   const children = (id: string | undefined) => tasks.filter(task => parentOf(task) === id)
-  const lines: Piece[][] = []
+  const lines: Piece[][] = accepted.length ? [[TASK_MARK.completed, p(' '), p(counted(accepted.length, s.pane.acceptedOne, s.pane.accepted)), p(`  ${idRanges(accepted.map(task => task.id))}`, 'dim')]] : []
   const seen = new Set<string>()
   const walk = (task: SpiderTask, lead: string, branch: string, last: boolean) => {
     if (seen.has(task.id)) return
@@ -131,17 +149,21 @@ function planLines(run: SpiderRun, v: PaneView, s: Strings, inner: number): Piec
     const waits = state === 'blocked' ? task.after.filter(id => run.tasks.find(t => t.id === id)?.state !== 'completed') : []
     const steps = agent?.steps && state === 'running' ? ` (${agent.steps.done}/${agent.steps.total})` : ''
     const meta = [
-      p(`  ${task.owner} · `, 'dim'), p(s.task[state], TASK_STYLE[state] ?? 'dim'), p(steps, 'dim'),
+      p(`${task.owner} · `, 'dim'), p(s.task[state], TASK_STYLE[state] ?? 'dim'), p(steps, 'dim'),
       ...(agent && state === 'running' ? [p(`  ← ${nameOf(agent)}`, 'dim')] : []),
       ...(waits.length ? [p(`  ${s.pane.waits} ${waits.join(', ')}`, 'dim')] : []),
     ].filter(piece => piece.text)
-    const head = [p(lead + branch, 'dim'), TASK_MARK[state], p(' ')]
-    const room = Math.max(TITLE_MIN, inner - width(head) - width(meta))
-    lines.push([...head, p(cut(`${task.id} ${task.title}`, room), state === 'completed' ? 'plain' : 'title'), ...meta])
+    const head = [p(lead + branch, 'dim'), TASK_MARK[state], p(' '), p(`${task.id} `, state === 'completed' ? 'plain' : 'title')]
     const under = lead + (branch ? (last ? '   ' : '│  ') : '')
-    const detail = task.state === 'completed' ? task.evidence : task.errors.at(-1)
     const kids = children(task.id)
-    if (detail) lines.push([p(`${under}${kids.length ? '│ ' : '  '} `, 'dim'), p(detail, task.state === 'completed' ? 'dim' : 'error')])
+    // The rail down to this task's children, then spaces to the column the title starts at.
+    const indent = p(`${under}${kids.length ? '│' : ' '}`.padEnd(width(head)), 'dim')
+    const room = Math.max(TITLE_MIN, inner - width(head))
+    const titleStyle = state === 'completed' ? 'plain' : 'title'
+    const [first = '', ...rest] = wrap(task.title, room, 2)
+    lines.push([...head, p(first, titleStyle)], ...rest.map(text => [indent, p(text, titleStyle)]), [indent, ...meta])
+    const detail = task.state === 'completed' ? task.evidence : task.errors.at(-1)
+    for (const text of detail ? wrap(detail, Math.max(TITLE_MIN, inner - width([indent])), 2) : []) lines.push([indent, p(text, task.state === 'completed' ? 'dim' : 'error')])
     kids.forEach((kid, i) => walk(kid, under, i === kids.length - 1 ? '└─ ' : '├─ ', i === kids.length - 1))
   }
   for (const root of children(undefined)) walk(root, '', '', true)
@@ -265,10 +287,11 @@ export function paneModel(v: PaneView): PaneModel {
   const card = (key: CardKey, title: string, lines: Piece[][], count?: string, aside: Piece[] = []): Card =>
     ({ key, tone: CARD_TONE[key], title, ...(count !== undefined ? { count } : {}), aside, lines: lines.map(line => fit(line, inner)) })
   const cards: Card[] = [card('session', s.pane.session, sessionLines(v, s, inner))]
-  if (v.run) {
-    const progress = planProgress(v.run)
-    cards.push(card('plan', s.pane.plan, planLines(v.run, v, s, inner), progress.count, progress.aside))
+  const plan = (run: SpiderRun, fold: boolean) => {
+    const progress = planProgress(run)
+    return card('plan', s.pane.plan, planLines(run, v, s, inner, fold), progress.count, progress.aside)
   }
+  if (v.run) cards.push(plan(v.run, false))
   if (running.length || !v.agents.length) {
     const lines = running.length ? running.flatMap(a => [agentRow(a, v, s, inner), ...[activityLine(a, v, s, inner)].filter(line => line !== null)]) : [[p(s.pane.noAgents, 'dim')]]
     cards.push(card('running', s.pane.agentsRunning, lines, String(running.length)))
@@ -277,7 +300,9 @@ export function paneModel(v: PaneView): PaneModel {
   if (planned.length) cards.push(card('planned', s.pane.agentsPlanned, planned.map(task => plannedRow(task, inner)), String(planned.length)))
   const timeline = timelineLines(v, s, inner)
   if (timeline.length) cards.push(card('timeline', s.pane.timeline, timeline))
-  // Short of rows, the least current cards go first.
+  // Short of rows, the accepted tasks fold into one line first, then the least current cards go.
+  const at = cards.findIndex(c => c.key === 'plan')
+  if (v.run && at >= 0 && v.rows !== undefined && rowsOf(cards) > v.rows) cards[at] = plan(v.run, true)
   for (const key of ['timeline', 'finished', 'planned'] as const) {
     if (v.rows === undefined || rowsOf(cards) <= v.rows) break
     const at = cards.findIndex(c => c.key === key)
