@@ -8,6 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
+| [comfyui-local](plugins/comfyui-local/README.md) | Lets Claude generate images, video, audio and 3D on your self-hosted ComfyUI, search its nodes, models and templates, and manage node packs through ComfyUI-Manager, with the server in the `url` option. Unofficial; its slash commands are ported from Comfy-Org/comfy-skills. |
 | [coolify](plugins/coolify/README.md) | Lets Claude read your Coolify instance and create, deploy or delete projects and resources through its API, with the instance in the `url` option and the token in the sensitive `apiKey` option. |
 | [file-explorer](plugins/file-explorer/README.md) | A file tree pane beside the conversation: git status per file and folder, a mark on each file Claude reads, edits, creates, removes, finds or commits, search across unopened folders, preview, and `@path` into the prompt. |
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
@@ -27,6 +28,7 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.303 
 /plugin marketplace add anderson-spider/claude-mods
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
+/plugin install comfyui-local@spider-claude-mods
 /plugin install coolify@spider-claude-mods
 /plugin install file-explorer@spider-claude-mods
 /plugin install gitlab@spider-claude-mods
@@ -49,7 +51,7 @@ codex-computer-use also needs a local helper on the Mac: follow [its install ste
 curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh
 ```
 
-Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure gitlab` for its `tokens`, `claude plugin configure tailscale` for its `apiKey` `claude plugin configure coolify` for its `url` and `apiKey`, and `claude plugin configure subagent-effort` for its `apiKey` (or set `JEV_API_KEY`).
+Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure gitlab` for its `tokens`, `claude plugin configure tailscale` for its `apiKey`, `claude plugin configure coolify` for its `url` and `apiKey`, `claude plugin configure comfyui-local` for its `url`, and `claude plugin configure subagent-effort` for its `apiKey` (or set `JEV_API_KEY`).
 
 ### Update
 
