@@ -7,6 +7,7 @@ Claude Code **function hooks mods** marketplace. User-facing setup is in [README
 - Plugin work: read `plugins/<name>/AGENTS.md` before changing files under `plugins/<name>/`. Keep plugin guidance there: a plugin-root `CLAUDE.md` draws a validation warning.
 - ChatGPT browser tools: `plugins/chatgpt/AGENTS.md`.
 - Native Mac app control through Codex: `plugins/codex-computer-use/AGENTS.md`.
+- Self-hosted ComfyUI tools (nodes, models, templates, jobs, uploads, ComfyUI-Manager): `plugins/comfyui-local/AGENTS.md`.
 - Coolify API tools (projects, applications, deployments): `plugins/coolify/AGENTS.md`.
 - File tree pane with git status and Claude's activity: `plugins/file-explorer/AGENTS.md`.
 - GitLab merge requests and pipelines of the current repository: `plugins/gitlab/AGENTS.md`.

@@ -20,7 +20,7 @@ set -eu
 MARKET=spider-claude-mods
 REPO=${BOOTSTRAP_SOURCE:-anderson-spider/claude-mods}
 # Every plugin of the marketplace; check-consistency keeps this list equal to marketplace.json.
-ALL="chatgpt codex-computer-use coolify file-explorer gitlab image-preview session-hud spider-team subagent-effort tailscale"
+ALL="chatgpt codex-computer-use comfyui-local coolify file-explorer gitlab image-preview session-hud spider-team subagent-effort tailscale"
 # Plugins merged into another, as old:new: installing or updating new uninstalls old, whose hooks it now carries.
 RETIRED="spider-progress:spider-team"
 NODE=${BOOTSTRAP_NODE:-/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node}

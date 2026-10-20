@@ -1,0 +1,16 @@
+{
+  "name": "comfyui-local",
+  "version": "0.1.0",
+  "description": "Generate images, video and audio and manage node packs on your self-hosted ComfyUI (and ComfyUI-Manager) through its HTTP API, using the url plugin option; unofficial, with slash commands ported from Comfy-Org/comfy-skills.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "url": {
+      "type": "string",
+      "title": "ComfyUI URL",
+      "description": "Your server's origin on the local network, such as http://192.168.0.10:8188. Files you upload and workflows you submit go only there. Leave it out of repository settings, which would make the plugin refuse it."
+    }
+  }
+}
