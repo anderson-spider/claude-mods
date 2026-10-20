@@ -15,7 +15,8 @@ Then explain, briefly and in a friendly tone:
 - List the model files on the server (`search_models`), the nodes installed, core and custom (`search_nodes`), and the workflow templates it ships (`search_templates`, `get_template`)
 - Build and run multi-step workflows (img2img, upscaling, background removal, style transfer)
 - Watch, cancel and fetch jobs (`get_job_status`, `cancel_job`, `get_output`)
-- With ComfyUI-Manager 4: list the installed node packs, search the Comfy Registry and install, update, disable or remove a pack (`manager_packs`, `manager_search_packs`, `manager_task`); ComfyUI must be restarted afterwards
+- With ComfyUI-Manager 4: list the installed node packs, search the Comfy Registry and install, update, disable or remove a pack (`manager_packs`, `manager_search_packs`, `manager_task`), then restart ComfyUI to load the change (`restart_server`)
+- Keep a UI-format workflow in your library, the frontend's Workflows tab (`list_workflows`, `get_workflow`, `save_workflow`)
 
 **Quick examples to try:**
 

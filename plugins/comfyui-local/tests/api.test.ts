@@ -5,13 +5,17 @@ import {
   getJobStatus,
   getOutput,
   getTemplate,
+  getWorkflow,
+  listWorkflows,
   managerPacks,
   managerTask,
   outputFiles,
   packOf,
   parseWorkflow,
+  restartServer,
   runManagerTask,
   safeSubfolder,
+  saveWorkflow,
   searchModels,
   searchNodes,
   searchPacks,
@@ -21,8 +25,11 @@ import {
   summarizeNode,
   systemInfo,
   uploadArgv,
+  uiWorkflow,
   uploadFile,
   viewUrl,
+  workflowFile,
+  type Clock,
   type Fetch,
   type Run,
 } from '../hooks/api'
@@ -315,6 +322,7 @@ test('searchPacks queries the Comfy Registry', async () => {
 const INSTALLED = [
   { folder: 'ComfyUI-DyPE', cnr_id: 'comfyui-dype', ver: '2.19.1', enabled: true },
   { folder: 'old', aux_id: 'me/old', ver: 'abc123', enabled: false },
+  { folder: 'tiles', aux_id: 'me/tiles', ver: 'c10836d', enabled: true },
 ]
 
 test('managerTask builds the Manager 4 task body per action, keying installed packs the way the worker does', () => {
@@ -328,6 +336,7 @@ test('managerTask builds the Manager 4 task body per action, keying installed pa
   // a git-cloned pack goes by its folder as unknown
   expect(managerTask({ action: 'uninstall', pack: 'old' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'old', is_unknown: true })
   expect(managerTask({ action: 'disable', pack: 'old' }, 'u', INSTALLED).task?.kind).toBe('disable')
+  expect(managerTask({ action: 'update', pack: 'tiles' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'tiles', node_ver: 'c10836d' })
   expect(managerTask({ action: 'enable', pack: 'ComfyUI-DyPE' }, 'u', INSTALLED).task?.params).toEqual({ cnr_id: 'comfyui-dype' })
   expect(managerTask({ action: 'enable', pack: 'old' }, 'u', INSTALLED).error).toContain('did not come from the registry')
   expect(managerTask({ action: 'fix', pack: 'ComfyUI-DyPE' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'comfyui-dype', node_ver: '2.19.1' })
@@ -337,16 +346,18 @@ test('managerTask builds the Manager 4 task body per action, keying installed pa
 })
 
 test('runManagerTask queues the task, starts the worker and reports the result when it is already there; a 404 means no Manager', async () => {
-  const installed = { 'GET /v2/customnode/installed': { body: { old: { ver: 'abc', cnr_id: null, aux_id: 'me/old', enabled: true } } } }
+  // the Manager lists a git-cloned pack the registry does not know with cnr_id "", which is no registry id
+  const installed = { 'GET /v2/customnode/installed': { body: { old: { ver: 'abc', cnr_id: '', aux_id: 'me/old', enabled: true } } } }
   const { fetch, calls } = server({ ...installed, 'POST /v2/manager/queue/task': { body: '' }, 'POST /v2/manager/queue/start': { status: 201, body: '' } })
   const out = await runManagerTask(fetch, BASE, { action: 'install', pack: 'comfyui-pixel' }, 'u1')
-  expect(out.text).toBe('install of comfyui-pixel queued (task u1). manager_packs shows the task queue and recent results; a restart of ComfyUI is needed before new or removed nodes show in search_nodes.')
+  expect(out.text).toBe('install of comfyui-pixel queued (task u1). manager_packs shows the task queue and recent results; a restart of ComfyUI (restart_server) is needed before new or removed nodes show in search_nodes.')
   expect(calls.map((c) => `${c.method} ${c.url.slice(BASE.length)}`)).toEqual(['GET /v2/customnode/installed', 'POST /v2/manager/queue/task', 'POST /v2/manager/queue/start', 'GET /v2/manager/queue/history?ui_id=u1'])
   expect(JSON.parse(calls[1]?.body ?? '')).toEqual({ ui_id: 'u1', client_id: 'comfyui-local', kind: 'install', params: expect.objectContaining({ id: 'comfyui-pixel' }) })
   const quick = server({ ...installed, 'POST /v2/manager/queue/task': { body: '' }, 'POST /v2/manager/queue/start': { body: '' }, 'GET /v2/manager/queue/history?ui_id=u2': { body: { history: { u2: { kind: 'disable', params: { node_name: 'old' }, status: { status_str: 'success', completed: true, messages: [] } } } } } })
-  expect((await runManagerTask(quick.fetch, BASE, { action: 'disable', pack: 'old' }, 'u2')).text).toBe('disable of old done: u2: disable old -> success. Restart ComfyUI for the nodes to change.')
+  expect((await runManagerTask(quick.fetch, BASE, { action: 'disable', pack: 'old' }, 'u2')).text).toBe('disable of old done: u2: disable old -> success. Restart ComfyUI (restart_server) for the nodes to change.')
   const failed = server({ ...installed, 'POST /v2/manager/queue/task': { body: '' }, 'POST /v2/manager/queue/start': { body: '' }, 'GET /v2/manager/queue/history?ui_id=u3': { body: { history: { u3: { kind: 'uninstall', params: { node_name: 'old' }, status: { status_str: 'failed', completed: true, messages: ['security level'] } } } } } })
   const err = await runManagerTask(failed.fetch, BASE, { action: 'uninstall', pack: 'old' }, 'u3')
+  expect(JSON.parse(failed.calls[1]?.body ?? '').params).toEqual({ node_name: 'old', is_unknown: true })
   expect(err.isError).toBe(true)
   expect(err.text).toContain('uninstall of old failed: u3: uninstall old -> failed (security level)')
   const none = await runManagerTask(server({}).fetch, BASE, { action: 'install', pack: 'p' }, 'u')
@@ -362,4 +373,159 @@ test('an answer past the limit is cut and says so', async () => {
   const out = await searchNodes(fetch, BASE, { limit: 200 })
   expect(out.text.length).toBeLessThan(LIMIT + 100)
   expect(out.text).toContain(`[cut at ${LIMIT} characters]`)
+})
+
+/** A clock that moves only when slept on, recording each sleep. */
+function clock(start = 1_000_000) {
+  const sleeps: number[] = []
+  let t = start
+  const c: Clock = { sleep: async (ms) => void (sleeps.push(ms), (t += ms)), now: async () => t }
+  return { clock: c, sleeps }
+}
+
+const EMPTY_QUEUE = { 'GET /queue': { body: { queue_running: [], queue_pending: [] } } }
+const STATS = { system: { comfyui_version: '0.41.0' } }
+
+/** The server across a reboot: the POST drops the connection, then /system_stats is refused `down` times before it answers. */
+function rebooting(down: number, extra: Record<string, { status?: number; body: unknown }> = {}) {
+  const { fetch: routed, calls } = server({ ...EMPTY_QUEUE, ...extra })
+  let refused = 0
+  const fetch: Fetch = async (url, init) => {
+    const path = url.slice(BASE.length)
+    if (init?.method === 'POST' && path === '/v2/manager/reboot') {
+      calls.push({ url, method: 'POST', body: init.body })
+      throw new Error('socket hang up')
+    }
+    if (path === '/system_stats') {
+      calls.push({ url, method: 'GET' })
+      if (refused++ < down) throw new Error('ECONNREFUSED')
+      return { status: 200, ok: true, text: JSON.stringify(STATS) }
+    }
+    return routed(url, init)
+  }
+  return { fetch, calls }
+}
+
+test('restartServer posts the reboot as JSON, takes the dropped connection as the start and polls until the server answers', async () => {
+  const installed = { 'GET /v2/customnode/installed': { body: { a: { ver: '1', cnr_id: 'a', aux_id: null, enabled: true }, b: { ver: 'x', cnr_id: '', aux_id: 'me/b', enabled: true } } } }
+  const { fetch, calls } = rebooting(10, { ...installed, 'POST /v2/customnode/import_fail_info_bulk': { body: { a: null, 'me/b': { error: 'ModuleNotFoundError: no module named onnxruntime\nmore', traceback: '...' } } } })
+  const { clock: c, sleeps } = clock()
+  const out = await restartServer(fetch, BASE, {}, c)
+  expect(out.isError).toBe(false)
+  expect(out.text).toBe('Restarted in 22 s: ComfyUI 0.41.0.\n1 node pack failed to import (the server log has the traceback):\nme/b: ModuleNotFoundError: no module named onnxruntime')
+  expect(sleeps).toEqual(Array(11).fill(2_000))
+  const reboot = calls.find((call) => call.url.endsWith('/v2/manager/reboot'))
+  expect(reboot).toEqual({ url: `${BASE}/v2/manager/reboot`, method: 'POST', body: '{}' })
+  expect(JSON.parse(calls.at(-1)?.body ?? '')).toEqual({ cnr_ids: ['a'], urls: ['me/b'] })
+  // with no import info to read, the answer leaves the packs out
+  expect((await restartServer(rebooting(1).fetch, BASE, {}, clock().clock)).text).toBe('Restarted in 4 s: ComfyUI 0.41.0.')
+  const clean = rebooting(0, { ...installed, 'POST /v2/customnode/import_fail_info_bulk': { body: { a: null, 'me/b': null } } })
+  expect((await restartServer(clean.fetch, BASE, {}, clock().clock)).text).toBe('Restarted in 2 s: ComfyUI 0.41.0.\nNo node pack reports an import error.')
+})
+
+test('restartServer refuses while a job is queued unless forced, and says how many', async () => {
+  const busy = { 'GET /queue': { body: { queue_running: [[1, ID, {}, {}, []]], queue_pending: [[2, 'p', {}, {}, []], [3, 'q', {}, {}, []]] } } }
+  const { fetch, calls } = rebooting(0, busy)
+  const refused = await restartServer(fetch, BASE, {}, clock().clock)
+  expect(refused.isError).toBe(true)
+  expect(refused.text).toContain('the queue holds 1 running and 2 pending jobs')
+  expect(calls.map((call) => call.method)).toEqual(['GET'])
+  expect((await restartServer(fetch, BASE, { force: true }, clock().clock)).text).toBe('Forced past 1 running and 2 pending jobs, which the restart dropped. Restarted in 2 s: ComfyUI 0.41.0.')
+})
+
+test('restartServer explains a 403, a missing Manager, a server that never went down and one that never came back', async () => {
+  const { clock: c } = clock()
+  const forbidden = await restartServer(server({ ...EMPTY_QUEUE, 'POST /v2/manager/reboot': { status: 403, body: '' } }).fetch, BASE, {}, c)
+  expect(forbidden.isError).toBe(true)
+  expect(forbidden.text).toBe('The Manager refused the reboot (403): its security_level is below middle in user/__manager/config.ini on the server.')
+  expect((await restartServer(server(EMPTY_QUEUE).fetch, BASE, {}, c)).text).toContain('not installed on this server')
+  const stayed = await restartServer(server({ ...EMPTY_QUEUE, 'POST /v2/manager/reboot': { body: '' }, 'GET /system_stats': { body: STATS } }).fetch, BASE, {}, c)
+  expect(stayed.isError).toBe(true)
+  expect(stayed.text).toContain('kept running without restarting')
+  // an empty answer to the reboot is the restart starting when the server then goes down
+  const empty = server({ ...EMPTY_QUEUE, 'POST /v2/manager/reboot': { body: '' } })
+  const { clock: slow, sleeps } = clock()
+  const gone = await restartServer(empty.fetch, BASE, {}, slow)
+  expect(gone.isError).toBe(true)
+  expect(gone.text).toContain('did not answer /system_stats within 120 s')
+  expect(sleeps.length).toBe(60)
+  const down: Fetch = async () => { throw new Error('ECONNREFUSED') }
+  expect((await restartServer(down, BASE, {}, c)).text).toBe(`Could not reach the ComfyUI server at ${BASE}: ECONNREFUSED`)
+})
+
+test('restartServer takes an empty answer followed by the server going down, or a gateway error, as the restart starting', async () => {
+  let polls = 0
+  const headers: unknown[] = []
+  const answered = (reboot: { status: number; text: string }): Fetch => async (url, init) => {
+    const path = url.slice(BASE.length)
+    if (path === '/queue') return { status: 200, ok: true, text: JSON.stringify({ queue_running: [], queue_pending: [] }) }
+    if (path === '/v2/manager/reboot') return headers.push(init?.headers), { ...reboot, ok: reboot.status < 400 }
+    if (path === '/system_stats' && polls++ < 2) throw new Error('ECONNREFUSED')
+    if (path === '/system_stats') return { status: 200, ok: true, text: JSON.stringify(STATS) }
+    return { status: 404, ok: false, text: 'not found' }
+  }
+  expect((await restartServer(answered({ status: 200, text: '' }), BASE, {}, clock().clock)).text).toBe('Restarted in 6 s: ComfyUI 0.41.0.')
+  expect(headers[0]).toEqual({ 'Content-Type': 'application/json' })
+  // behind a proxy, the dropped connection is a 502 and the server may already answer on the first poll
+  polls = 2
+  expect((await restartServer(answered({ status: 502, text: 'Bad Gateway' }), BASE, {}, clock().clock)).text).toBe('Restarted in 2 s: ComfyUI 0.41.0.')
+})
+
+const UI = { last_node_id: 1, nodes: [{ id: 1, type: 'SaveImage' }], links: [], version: 0.4 }
+const SAVED = '/api/userdata/workflows%2F02%20Pixel%20Art%2FPr%C3%A9dio.json'
+
+test('workflowFile keeps subfolders under workflows/, adds .json and refuses .. and absolute paths', () => {
+  expect(workflowFile('02 Pixel Art/Prédio')).toBe('workflows/02 Pixel Art/Prédio.json')
+  expect(workflowFile('mcp.JSON')).toBe('workflows/mcp.JSON')
+  expect(workflowFile('workflows/a/b')).toBe('workflows/a/b.json')
+  // the server URL-decodes the name a second time, so an encoded ".." is refused like a plain one
+  for (const bad of ['../x', 'a/../../x', '/etc/x', 'C:/x', 'a\\b', 'a//b', './a', '%2e%2e/comfy.settings', 'a%2Fb', 'a:b', 'a\u0001b', '', undefined]) expect(workflowFile(bad), String(bad)).toBeUndefined()
+})
+
+test('uiWorkflow takes a UI export or its JSON and refuses the API format with why', () => {
+  expect(uiWorkflow(UI).workflow).toEqual(UI)
+  expect(uiWorkflow(JSON.stringify(UI)).workflow).toEqual(UI)
+  expect(uiWorkflow(PROMPT).error).toContain('breaks the frontend workflow list ("e is not iterable"): run it with submit_workflow')
+  expect(uiWorkflow({ nodes: [] }).error).toContain('must be in UI format')
+  expect(uiWorkflow('{').error).toContain('must be in UI format')
+})
+
+test('saveWorkflow posts the UI JSON to the URL-encoded userdata path, never overwriting unless asked', async () => {
+  const { fetch, calls } = server({
+    [`POST ${SAVED}?overwrite=false&full_info=true`]: { body: { path: 'workflows/02 Pixel Art/Prédio.json', size: 81, modified: 1792525594962 } },
+    [`POST ${SAVED}?overwrite=true&full_info=true`]: { body: { path: 'workflows/02 Pixel Art/Prédio.json', size: 81, modified: 1792525594962 } },
+  })
+  const out = await saveWorkflow(fetch, BASE, { path: '02 Pixel Art/Prédio', workflow: UI })
+  expect(out.text).toBe('Saved workflows/02 Pixel Art/Prédio.json (81 bytes, modified 2026-10-20T19:46:34Z). It shows in the Workflows tab of the ComfyUI frontend once its list is reopened.')
+  expect(calls[0]).toEqual({ url: `${BASE}${SAVED}?overwrite=false&full_info=true`, method: 'POST', body: JSON.stringify(UI) })
+  expect((await saveWorkflow(fetch, BASE, { path: '02 Pixel Art/Prédio.json', workflow: JSON.stringify(UI), overwrite: true })).isError).toBe(false)
+  expect(calls[1]?.url).toBe(`${BASE}${SAVED}?overwrite=true&full_info=true`)
+  const taken = await saveWorkflow(server({ [`POST ${SAVED}?overwrite=false&full_info=true`]: { status: 409, body: 'File already exists' } }).fetch, BASE, { path: '02 Pixel Art/Prédio', workflow: UI })
+  expect(taken.isError).toBe(true)
+  expect(taken.text).toBe('workflows/02 Pixel Art/Prédio.json already exists. Read it with get_workflow, then save with overwrite: true to replace it, or choose another path.')
+  const api = await saveWorkflow(fetch, BASE, { path: 'x', workflow: PROMPT })
+  expect(api.isError).toBe(true)
+  expect(api.text).toContain('API format')
+  expect((await saveWorkflow(fetch, BASE, { path: '../x', workflow: UI })).text).toContain('no ".."')
+  expect(calls.length).toBe(2)
+})
+
+test('listWorkflows lists path, size and date sorted by path, and says when nothing is saved', async () => {
+  const route = 'GET /api/userdata?dir=workflows&recurse=true&split=false&full_info=true'
+  const { fetch } = server({ [route]: { body: [{ path: 'b/two.json', size: 20, modified: 1792525594962 }, { path: 'a.json', size: 10, modified: 1792525594962 }] } })
+  expect((await listWorkflows(fetch, BASE)).text).toBe('2 workflows in workflows/ (the path save_workflow and get_workflow take):\na.json (10 bytes, modified 2026-10-20T19:46:34Z)\nb/two.json (20 bytes, modified 2026-10-20T19:46:34Z)')
+  expect((await listWorkflows(server({}).fetch, BASE)).text).toBe('No workflow is saved yet: the workflows/ folder does not exist.')
+  expect((await listWorkflows(server({ [route]: { body: [] } }).fetch, BASE)).text).toBe('No workflow is saved yet: the workflows/ folder is empty.')
+})
+
+test('getWorkflow reads one saved workflow compacted, says when it is missing and refuses one too large to hand over whole', async () => {
+  const { fetch } = server({ [`GET ${SAVED}`]: { body: JSON.stringify(UI, null, 2) } })
+  const out = await getWorkflow(fetch, BASE, { path: '02 Pixel Art/Prédio' })
+  expect(out.text).toBe(`Workflow workflows/02 Pixel Art/Prédio.json in UI format; edit it and save it back with save_workflow and overwrite: true.\n${JSON.stringify(UI)}`)
+  expect((await getWorkflow(fetch, BASE, { path: 'none' })).text).toBe('No workflow at workflows/none.json: list_workflows shows the saved ones.')
+  expect((await getWorkflow(fetch, BASE, { path: '/abs' })).isError).toBe(true)
+  const big = server({ [`GET ${SAVED}`]: { body: { ...UI, notes: 'x'.repeat(LIMIT) } } })
+  const err = await getWorkflow(big.fetch, BASE, { path: '02 Pixel Art/Prédio' })
+  expect(err.isError).toBe(true)
+  expect(err.text).toContain('more than the 60000 one answer carries')
 })

@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { OFF_TEXT } from '../hooks/access'
 import { ON, URL_OPTION, id, started, world } from './host'
 
-const TOOLS = ['system_info', 'search_nodes', 'search_models', 'search_templates', 'get_template', 'submit_workflow', 'get_job_status', 'cancel_job', 'upload_file', 'get_output', 'manager_packs', 'manager_search_packs', 'manager_task']
+const TOOLS = ['system_info', 'search_nodes', 'search_models', 'search_templates', 'get_template', 'submit_workflow', 'get_job_status', 'cancel_job', 'upload_file', 'get_output', 'manager_packs', 'manager_search_packs', 'manager_task', 'restart_server', 'save_workflow', 'list_workflows', 'get_workflow']
 const ID = '11111111-2222-4333-8444-555555555555'
 const text = (result: { result?: unknown }) => String(result.result)
 
@@ -77,4 +77,38 @@ test('manager_task refuses a bad action before any request', ON, async ($, on) =
   expect(result.isError).toBe(true)
   // the installed list is read first, to key the pack the way the Manager does; a bad action still queues nothing
   expect(sent.map((s) => s.method)).toEqual(['GET'])
+})
+
+test('restart_server waits through the host process, never the hook clock, and refuses with jobs queued', ON, async ($, on) => {
+  const { tools, sent, processes, host } = world(on, { routes: { 'GET /queue': { body: { queue_running: [[1, ID, {}, {}, []]], queue_pending: [] } } } })
+  await started($, tools)
+  const busy = await $.tool.call({ tool: id('restart_server') } as never)
+  expect(busy.isError).toBe(true)
+  expect(text(busy)).toContain('1 running and 0 pending job')
+  expect(sent.map((s) => s.method)).toEqual(['GET'])
+  // a server that answers the reboot and stays up: one poll, slept through the host process
+  host.routes = { 'GET /queue': { body: { queue_running: [], queue_pending: [] } }, 'POST /v2/manager/reboot': { body: '' }, 'GET /system_stats': { body: { system: {} } } }
+  expect(text(await $.tool.call({ tool: id('restart_server') } as never))).toContain('kept running without restarting')
+  expect(sent.find((s) => s.url.endsWith('/v2/manager/reboot'))).toEqual({ url: `${URL_OPTION}/v2/manager/reboot`, method: 'POST', body: '{}' })
+  expect(processes).toEqual([['sleep', '2']])
+})
+
+test('save_workflow, list_workflows and get_workflow go to the user library through the host fetch', ON, async ($, on) => {
+  const file = '/api/userdata/workflows%2F_teste%2Fmcp.json'
+  const ui = { nodes: [], links: [] }
+  const { tools, sent } = world(on, {
+    routes: {
+      [`POST ${file}?overwrite=false&full_info=true`]: { body: { path: 'workflows/_teste/mcp.json', size: 25, modified: 0 } },
+      'GET /api/userdata?dir=workflows&recurse=true&split=false&full_info=true': { body: [{ path: '_teste/mcp.json', size: 25, modified: 0 }] },
+      [`GET ${file}`]: { body: ui },
+    },
+  })
+  await started($, tools)
+  expect(text(await $.tool.call({ tool: id('save_workflow'), path: '_teste/mcp', workflow: ui } as never))).toContain('Saved workflows/_teste/mcp.json (25 bytes')
+  expect(sent[0]?.body).toBe(JSON.stringify(ui))
+  expect(text(await $.tool.call({ tool: id('list_workflows') } as never))).toContain('_teste/mcp.json (25 bytes')
+  expect(text(await $.tool.call({ tool: id('get_workflow'), path: '_teste/mcp.json' } as never))).toContain('{"nodes":[],"links":[]}')
+  const api = await $.tool.call({ tool: id('save_workflow'), path: 'x', workflow: { '1': { class_type: 'X', inputs: {} } } } as never)
+  expect(api.isError).toBe(true)
+  expect(sent.length).toBe(3)
 })

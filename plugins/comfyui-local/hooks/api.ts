@@ -1,8 +1,9 @@
 // The ComfyUI and ComfyUI-Manager HTTP calls, pure: the fetch and the process runner are injected. Each tool is one
 // exported function that takes the model's raw input (nothing trusted until checked) and answers text for the host.
 // Endpoints: ComfyUI server.py (/system_stats, /object_info, /models, /prompt, /history, /queue, /interrupt,
-// /upload/image, /view, /templates, /api/workflow_templates) and ComfyUI-Manager 4 (/v2/customnode/installed,
-// /v2/manager/queue/{task,start,status,history}, /v2/manager/version); the pack catalog is the public Comfy Registry.
+// /upload/image, /view, /templates, /api/workflow_templates), its app/user_manager.py (/api/userdata) and
+// ComfyUI-Manager 4 (/v2/customnode/installed, /v2/customnode/import_fail_info_bulk, /v2/manager/queue/{task,start,status,history},
+// /v2/manager/version, /v2/manager/reboot); the pack catalog is the public Comfy Registry.
 // Binary transfers (the multipart upload, the downloads) go through curl, since the host's fetch carries text only.
 
 export type FetchResponse = { status: number; ok: boolean; text: string }
@@ -602,7 +603,8 @@ export type InstalledPack = { folder: string; cnr_id?: string; aux_id?: string; 
 function installedPacks(value: unknown): InstalledPack[] {
   return Object.entries(isObject(value) ? value : {}).map(([folder, info]) => {
     const p = isObject(info) ? info : {}
-    return { folder, cnr_id: typeof p.cnr_id === 'string' ? p.cnr_id : undefined, aux_id: typeof p.aux_id === 'string' ? p.aux_id : undefined, ver: String(p.ver ?? '?'), enabled: p.enabled !== false }
+    // A git-cloned pack the registry does not know has cnr_id "" (not null), so an empty id is no id.
+    return { folder, cnr_id: str(p.cnr_id), aux_id: str(p.aux_id), ver: String(p.ver ?? '?'), enabled: p.enabled !== false }
   })
 }
 
@@ -720,6 +722,159 @@ export async function runManagerTask(fetch: Fetch, base: string, input: ManagerT
   const history = await getJson(fetch, base, `/v2/manager/queue/history?ui_id=${encodeURIComponent(uiId)}`)
   const done = history.error ? [] : taskLines(history.value)
   const what = `${String(built.task.kind)} of ${String(str(input.pack))}`
-  if (done.length) return done.some((line) => /-> (failed|error)/.test(line)) ? fail(`${what} failed: ${done.join('; ')}. The Manager's security level may forbid it (see the server log).`) : ok(`${what} done: ${done.join('; ')}. Restart ComfyUI for the nodes to change.`)
-  return ok(`${what} queued (task ${uiId}). manager_packs shows the task queue and recent results; a restart of ComfyUI is needed before new or removed nodes show in search_nodes.`)
+  if (done.length) return done.some((line) => /-> (failed|error)/.test(line)) ? fail(`${what} failed: ${done.join('; ')}. The Manager's security level may forbid it (see the server log).`) : ok(`${what} done: ${done.join('; ')}. Restart ComfyUI (restart_server) for the nodes to change.`)
+  return ok(`${what} queued (task ${uiId}). manager_packs shows the task queue and recent results; a restart of ComfyUI (restart_server) is needed before new or removed nodes show in search_nodes.`)
+}
+
+/** How restart_server waits for the server to come back: one GET /system_stats every `RESTART_POLL_MS`, for `RESTART_TIMEOUT_MS` at most. */
+export const RESTART_POLL_MS = 2_000
+export const RESTART_TIMEOUT_MS = 120_000
+
+/** The clock restart_server waits on, injected so a test runs at once. */
+export type Clock = { sleep: (ms: number) => Promise<void>; now: () => Promise<number> }
+
+const REBOOT_FORBIDDEN = 'The Manager refused the reboot (403): its security_level is below middle in user/__manager/config.ini on the server.'
+
+/** The packs that failed to import at the last start, one line each, from the Manager's import-fail info; undefined when it cannot say. */
+async function importFailures(fetch: Fetch, base: string): Promise<string[] | undefined> {
+  const installed = await getJson(fetch, base, '/v2/customnode/installed')
+  if (installed.error) return undefined
+  const packs = installedPacks(installed.value)
+  const cnrIds = packs.flatMap((p) => (p.cnr_id ? [p.cnr_id] : []))
+  const urls = packs.flatMap((p) => (!p.cnr_id && p.aux_id ? [p.aux_id] : []))
+  if (!cnrIds.length && !urls.length) return []
+  const sent = await postJson(fetch, base, '/v2/customnode/import_fail_info_bulk', { cnr_ids: cnrIds, urls })
+  if (sent.error || !sent.res.ok) return undefined
+  const body = parse(sent.res.text)
+  if (!isObject(body)) return undefined
+  return Object.entries(body).flatMap(([id, info]) => (isObject(info) ? [`${id}: ${String(info.error ?? '').trim().split('\n')[0] || 'failed to import'}`] : []))
+}
+
+export type RestartInput = { force?: unknown }
+
+/**
+ * Restarts ComfyUI through the Manager's POST /v2/manager/reboot and waits for /system_stats to answer again. It refuses
+ * while the queue holds a job, unless `force`. The reboot re-executes the process (or, under comfy-cli, exits and leaves
+ * comfy-cli a marker to start it again), so the connection usually drops: that, or an empty answer, is the restart beginning.
+ */
+export async function restartServer(fetch: Fetch, base: string, input: RestartInput, clock: Clock): Promise<Out> {
+  const queue = await getJson(fetch, base, '/queue')
+  if (queue.error) return queue.error
+  const q = isObject(queue.value) ? queue.value : {}
+  const running = queueItems(q.queue_running).length
+  const pending = queueItems(q.queue_pending).length
+  const busy = `${running} running and ${pending} pending job${running + pending === 1 ? '' : 's'}`
+  if (running + pending > 0 && input.force !== true) return fail(`Not restarted: the queue holds ${busy}. A restart kills the running job and drops the pending ones; wait until get_job_status shows the queue empty, or pass force: true.`)
+  const started = await clock.now()
+  // Sent as JSON: the Manager answers 400 to the content types a plain HTML form can post (its CSRF guard).
+  const sent = await postJson(fetch, base, '/v2/manager/reboot', {})
+  // A proxy in front of the server answers the dropped connection with a gateway error: the restart began there too.
+  let wentDown = sent.error !== undefined || (sent.res !== undefined && sent.res.status >= 502 && sent.res.status <= 504)
+  if (sent.res && !sent.res.ok && !wentDown) {
+    if (sent.res.status === 403) return fail(REBOOT_FORBIDDEN)
+    if (sent.res.status === 404) return fail(MANAGER_OFF)
+    return fail(`The Manager refused the reboot (${sent.res.status}): ${sent.res.text.slice(0, 500)}`)
+  }
+  let stats: unknown
+  for (;;) {
+    await clock.sleep(RESTART_POLL_MS)
+    const got = await getJson(fetch, base, '/system_stats')
+    if (!got.error && wentDown) {
+      stats = got.value
+      break
+    }
+    // An answer before the server was ever seen down comes from the old process: the reboot did not take.
+    if (!got.error) return fail('The Manager answered the reboot, but ComfyUI kept running without restarting (see the server log).')
+    wentDown = true
+    if ((await clock.now()) - started >= RESTART_TIMEOUT_MS) {
+      return fail(`The reboot was sent, but ComfyUI did not answer /system_stats within ${RESTART_TIMEOUT_MS / 1000} s. Check the service on the server: under systemd, its status and journal.`)
+    }
+  }
+  const seconds = Math.round(((await clock.now()) - started) / 1000)
+  const system = isObject(stats) && isObject(stats.system) ? stats.system : {}
+  const lines = [`${running + pending ? `Forced past ${busy}, which the restart dropped. ` : ''}Restarted in ${seconds} s: ComfyUI ${String(system.comfyui_version ?? '?')}.`]
+  const failures = await importFailures(fetch, base)
+  if (failures?.length) lines.push(`${failures.length} node pack${failures.length === 1 ? '' : 's'} failed to import (the server log has the traceback):`, ...failures)
+  else if (failures) lines.push('No node pack reports an import error.')
+  return ok(lines.join('\n'))
+}
+
+// --- workflows --------------------------------------------------------------------------------------------------------
+
+/** The user's workflow library, under the userdata folder (user/default/workflows on the server): the frontend's Workflows tab. */
+const WORKFLOWS = 'workflows'
+const BAD_WORKFLOW_PATH = 'path must be relative to workflows/, such as "02 Pixel Art/Isometric building": no leading slash, drive, backslash, colon, "%" or control character, no "..", no empty folder.'
+const API_FORMAT = 'workflow is in API format (node ids mapping to { class_type, inputs }). API format inside workflows/ breaks the frontend workflow list ("e is not iterable"): run it with submit_workflow instead, or convert it to UI format first.'
+
+/**
+ * The userdata file of a workflow, `workflows/<path>.json` (a leading `workflows/` taken as that folder), or undefined for
+ * an absolute path, `..` or an empty segment. `%` is refused too: the server URL-decodes the name again after the route
+ * did, so `%2e%2e` would become `..` there; a colon and control characters make no file name on every system.
+ */
+export function workflowFile(value: unknown): string | undefined {
+  const given = str(value)
+  const path = given?.startsWith(`${WORKFLOWS}/`) ? given.slice(WORKFLOWS.length + 1) : given
+  if (!path || path.startsWith('/') || /[\\:%\u0000-\u001f\u007f]/.test(path)) return undefined
+  if (path.split('/').some((part) => part === '' || part === '.' || part === '..')) return undefined
+  return `${WORKFLOWS}/${/\.json$/i.test(path) ? path : `${path}.json`}`
+}
+
+/** The /api/userdata route of one file: the whole relative path is one URL-encoded segment, slashes included. */
+const userdataPath = (file: string) => `/api/userdata/${encodeURIComponent(file)}`
+
+/** The workflow as a UI-format object (what the frontend saves: "nodes" and "links" arrays), or why it is not one. */
+export function uiWorkflow(value: unknown): { workflow: Record<string, unknown>; error?: undefined } | { workflow?: undefined; error: string } {
+  const parsed = typeof value === 'string' ? parse(value) : value
+  if (isObject(parsed) && Array.isArray(parsed.nodes) && Array.isArray(parsed.links)) return { workflow: parsed }
+  if (isObject(parsed) && Object.values(parsed).some((node) => isObject(node) && typeof node.class_type === 'string')) return { error: API_FORMAT }
+  return { error: 'workflow must be in UI format: an object with "nodes" and "links" arrays, as the frontend saves it and get_template answers (or that JSON as a string).' }
+}
+
+/** When a userdata file was last modified, from its milliseconds since the epoch. */
+const when = (ms: unknown) => (typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : '?')
+
+export type SaveWorkflowInput = { path?: unknown; workflow?: unknown; overwrite?: unknown }
+
+/** Saves a UI-format workflow to the user's library with POST /api/userdata/workflows%2F<path>.json, refusing to replace a file unless `overwrite`. */
+export async function saveWorkflow(fetch: Fetch, base: string, input: SaveWorkflowInput): Promise<Out> {
+  const file = workflowFile(input.path)
+  if (!file) return fail(BAD_WORKFLOW_PATH)
+  const ui = uiWorkflow(input.workflow)
+  if (ui.error !== undefined) return fail(ui.error)
+  // The server replaces an existing file unless the query says overwrite=false, so it is always sent.
+  const sent = await postJson(fetch, base, `${userdataPath(file)}?overwrite=${input.overwrite === true}&full_info=true`, ui.workflow)
+  if (sent.error) return sent.error
+  if (sent.res.status === 409) return fail(`${file} already exists. Read it with get_workflow, then save with overwrite: true to replace it, or choose another path.`)
+  if (!sent.res.ok) return fail(`POST /api/userdata answered ${sent.res.status}: ${sent.res.text.slice(0, 500)}`)
+  const info = parse(sent.res.text)
+  const saved = isObject(info) ? info : {}
+  return ok(`Saved ${typeof saved.path === 'string' ? saved.path : file} (${typeof saved.size === 'number' ? `${saved.size} bytes, ` : ''}modified ${when(saved.modified)}). It shows in the Workflows tab of the ComfyUI frontend once its list is reopened.`)
+}
+
+/** Lists the user's saved workflows with GET /api/userdata (recursive, with size and date), paths relative to workflows/. */
+export async function listWorkflows(fetch: Fetch, base: string): Promise<Out> {
+  const got = await getJson(fetch, base, `/api/userdata?dir=${WORKFLOWS}&recurse=true&split=false&full_info=true`)
+  if (got.error) return got.error.text.includes('answered 404') ? ok('No workflow is saved yet: the workflows/ folder does not exist.') : got.error
+  const files = (Array.isArray(got.value) ? got.value : [])
+    .filter(isObject)
+    .filter((f) => typeof f.path === 'string')
+    .sort((a, b) => String(a.path).localeCompare(String(b.path)))
+  if (!files.length) return ok('No workflow is saved yet: the workflows/ folder is empty.')
+  const lines = files.map((f) => `${String(f.path)} (${typeof f.size === 'number' ? `${f.size} bytes` : '?'}, modified ${when(f.modified)})`)
+  return ok(`${files.length} workflow${files.length === 1 ? '' : 's'} in workflows/ (the path save_workflow and get_workflow take):\n${lines.join('\n')}`)
+}
+
+export type GetWorkflowInput = { path?: unknown }
+
+/** One saved workflow's JSON with GET /api/userdata/workflows%2F<path>.json, compacted, as the base for an edit saved back with save_workflow. */
+export async function getWorkflow(fetch: Fetch, base: string, input: GetWorkflowInput): Promise<Out> {
+  const file = workflowFile(input.path)
+  if (!file) return fail(BAD_WORKFLOW_PATH)
+  const got = await getJson(fetch, base, userdataPath(file))
+  if (got.error) return got.error.text.includes('answered 404') ? fail(`No workflow at ${file}: list_workflows shows the saved ones.`) : got.error
+  const text = JSON.stringify(got.value)
+  const head = `Workflow ${file} in UI format; edit it and save it back with save_workflow and overwrite: true.\n`
+  // A cut JSON is no base for an edit, so a workflow past the limit is refused whole rather than cut.
+  if (head.length + text.length > LIMIT) return fail(`${file} is ${text.length} characters as compact JSON, more than the ${LIMIT} one answer carries.`)
+  return ok(head + text)
 }
