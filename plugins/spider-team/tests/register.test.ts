@@ -356,7 +356,6 @@ test('a settings read that fails at start still starts the clock, and a reload k
 
 test('a reload drops the generic agents an older version tracked, without ending the role agents', async ($, on) => {
   const { tools, stored } = world(on)
-  // Older code also wrote generic agents, which the host never reported ending.
   // Older code also wrote generic agents, which the host never reported ending: the first read after start holds one.
   let seed = false
   on('state.get', async (_$, e, next) => {
