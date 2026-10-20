@@ -3,6 +3,13 @@ import type { Kind } from './flows'
 export type Browser = {
   /** The backend's name, as the chooser and the advice name it; an error about the backend starts with it. */
   name: string
+  /** What the person does to sign in, for a backend with a way of its own; a logged-out page's not-ready text says this instead of the general advice. */
+  signIn?: string
+  /**
+   * The same for a page that is not ready for another reason (a dialog, a check), for a backend whose page nobody can
+   * see; such a page also moves the request on to the next backend (see `performRequest`).
+   */
+  notReady?: string
   /** The ids of the open tabs. */
   tabs(): Promise<string[]>
   /** Opens a tab at `url` (and the browser, when none is open) and returns its id. */
@@ -36,10 +43,10 @@ export type AskInput = {
   saveOnly?: boolean
 }
 
-/** `timedOut` marks a run that may still finish at `url`. */
+/** `timedOut` marks a run that may still finish at `url`; `held`, a page nobody can clear in this backend, before anything was sent. */
 export type AskResult =
   | { ok: true; url: string; markdown: string }
-  | { ok: false; error: string; url?: string; markdown?: string; timedOut?: boolean }
+  | { ok: false; error: string; url?: string; markdown?: string; timedOut?: boolean; held?: boolean }
 
 /** The plugin's own tab, kept across requests so it never takes over another. */
 export type TabHolder = { id?: string }
@@ -77,7 +84,7 @@ export type Image = { base64: string; type: string; width: number; height: numbe
 /** Every image the request produced (ChatGPT sometimes draws variants), last one last. */
 export type ImageResult =
   | { ok: true; url: string; images: Image[] }
-  | { ok: false; error: string; url?: string; markdown?: string; timedOut?: boolean }
+  | { ok: false; error: string; url?: string; markdown?: string; timedOut?: boolean; held?: boolean }
 
 export type Job = {
   id: number
@@ -96,8 +103,21 @@ export type Check = { name: string; ok: boolean; detail: string }
 // passes it on as is, and drops the MCP shape ({ data, mimeType }) silently.
 export type Preview = { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
 
-/** What a request came to; `error` holds only plugin error text, never ChatGPT output. */
-export type Outcome = { ok: boolean; text: string; error?: string; chatUrl?: string; paths?: string[]; timedOut?: boolean; previews?: Preview[]; markdown?: string }
+/**
+ * What a request came to; `error` holds only plugin error text, never ChatGPT output. `note` says the request ran in
+ * another backend than the first, and `text` starts with it.
+ */
+export type Outcome = {
+  ok: boolean
+  text: string
+  error?: string
+  chatUrl?: string
+  paths?: string[]
+  timedOut?: boolean
+  previews?: Preview[]
+  markdown?: string
+  note?: string
+}
 
 export type Request = {
   kind: Kind
@@ -127,7 +147,8 @@ export type OutputDeps = {
 }
 
 export type RequestDeps = {
-  browser(): Promise<Browser | string>
+  /** The first backend that opens, leaving out the one `skip` names; or why none does. */
+  browser(skip?: string): Promise<Browser | string>
   attachments: AttachmentFiles
   output: OutputDeps
 }

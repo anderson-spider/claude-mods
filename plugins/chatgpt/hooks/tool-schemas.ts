@@ -74,6 +74,8 @@ export const ASK_COMMAND_DESCRIPTION = 'Ask ChatGPT: /chatgpt-ask <question>'
 export const IMAGE_COMMAND_DESCRIPTION = 'Generate and save an image: /chatgpt-image <prompt>'
 export const DOCTOR_COMMAND_DESCRIPTION = 'Diagnose ChatGPT login and page selectors: /chatgpt-doctor [chat URL]'
 
+export const LOGIN_COMMAND_DESCRIPTION = "Sign in to ChatGPT in the plugin's headless Chromium (installs it the first time): /chatgpt-login"
+
 /** A tool the plugin registers: the name and description the model reads, its input schema, and for a tool served as a request, the request kind and the command that sends the same request. */
 export type ToolDef = {
   name: string

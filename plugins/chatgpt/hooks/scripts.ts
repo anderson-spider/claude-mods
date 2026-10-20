@@ -330,9 +330,11 @@ return JSON.stringify({
 
 // Marks the page, then leaves it: the mark is gone once the new page loads
 // (`LANDED`), which tells a reload of the same URL from the old page still
-// standing.
+// standing. A tab off chatgpt.com and OpenAI's sign-in pages stays put (`leaving: false`): a browser that restarted can give
+// the id of the plugin's old tab to one of the user's.
 export function leaveScript(url: string): string {
   return `
+if (!/^((.+\\.)?chatgpt\\.com|auth0?\\.openai\\.com)$/.test(location.hostname)) return JSON.stringify({ leaving: false });
 window.__chatgptLeaving = true;
 setTimeout(() => location.assign(${JSON.stringify(url)}), 50);
 return JSON.stringify({ leaving: true });`

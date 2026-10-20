@@ -24,14 +24,23 @@ export function pageStateOf<T extends { href: string } = PageState>(browser: Pic
   return state as T
 }
 
-// Goes to `target` in the plugin's own tab, opening one when it is gone, and
+// Whether the leave script moved the tab; an output that does not parse counts as moving, so a backend that prints
+// oddly keeps its tab.
+function moved(output: string): boolean {
+  try {
+    return parseOutput<{ leaving?: boolean }>(output).leaving !== false
+  } catch {
+    return true
+  }
+}
+
+// Goes to `target` in the plugin's own tab, opening one when it is gone or on another site, and
 // waits for the composer (or a login page); never touches a tab it did not
 // open. The home page is a new chat, so going there is what the "New chat"
 // button does. The browser's `open` action would open a new tab instead of navigating, so the tab
 // is moved by script (`leaveScript`).
 export async function findTab(browser: Pick<Browser, 'tabs' | 'openTab' | 'js' | 'waitFor'>, target: string, holder: TabHolder): Promise<string> {
-  if (holder.id && (await browser.tabs()).includes(holder.id)) {
-    await browser.js(holder.id, leaveScript(target))
+  if (holder.id && (await browser.tabs()).includes(holder.id) && moved(await browser.js(holder.id, leaveScript(target)))) {
     await browser.waitFor(holder.id, LANDED, LOAD_MS)
   } else {
     holder.id = await browser.openTab(target)
@@ -45,7 +54,7 @@ function orList(names: readonly string[]): string {
   return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names.at(-1)}`
 }
 
-type Ready = { ok: true; tabId: string; page: PageState } | { ok: false; error: string; url?: string }
+type Ready = { ok: true; tabId: string; page: PageState } | { ok: false; error: string; url?: string; held?: boolean }
 
 export function blocked(page: { blocker: string }): string {
   return page.blocker ? ` ChatGPT shows: "${page.blocker}".` : ''
@@ -55,7 +64,7 @@ export function blocked(page: { blocker: string }): string {
 // `busy` accepts a chat still answering (to save what it is writing); `backends` names the browsers the plugin tries
 // (it cannot import them: the list lives in a module that imports this one).
 export async function prepare(
-  browser: Pick<Browser, 'name' | 'tabs' | 'openTab' | 'js' | 'waitFor'>,
+  browser: Pick<Browser, 'name' | 'signIn' | 'notReady' | 'tabs' | 'openTab' | 'js' | 'waitFor'>,
   input: { chatUrl?: string },
   options: { progress: (text: string) => void; tab: TabHolder; busy?: boolean; backends: readonly string[] },
 ): Promise<Ready> {
@@ -68,13 +77,12 @@ export async function prepare(
   let page = pageStateOf(browser, await browser.js(tabId, stateScript(0)))
   if (!page.href.startsWith(ORIGIN) || page.login || !page.composer) {
     const named = options.backends.length ? ` (${orList(options.backends)})` : ''
-    return {
-      ok: false,
-      url: page.href,
-      error:
-        `ChatGPT is not ready in the browser (at ${page.href}).${blocked(page)} ` +
-        `Ask the user to log in to chatgpt.com in the browser the plugin uses${named}, or to clear what the page shows, and try again; never type credentials.`,
-    }
+    const general = `Ask the user to log in to chatgpt.com in the browser the plugin uses${named}, or to clear what the page shows, and try again; never type credentials.`
+    const notReady = (advice: string) => `ChatGPT is not ready in the browser (at ${page.href}).${blocked(page)} ${advice}`
+    if (page.login) return { ok: false, url: page.href, error: notReady(browser.signIn ?? general) }
+    // Nobody sees this backend's page, so nobody can clear what holds it (see Browser.notReady).
+    if (browser.notReady) return { ok: false, url: page.href, error: notReady(browser.notReady), held: true }
+    return { ok: false, url: page.href, error: notReady(general) }
   }
   if (page.stop && !options.busy) return { ok: false, url: page.href, error: 'ChatGPT is still answering in that chat; wait and try again.' }
   return { ok: true, tabId, page }

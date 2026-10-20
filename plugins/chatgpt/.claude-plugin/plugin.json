@@ -1,6 +1,6 @@
 {
   "name": "chatgpt",
-  "version": "0.10.4",
+  "version": "0.11.0",
   "description": "Ask ChatGPT or generate requested images in a logged-in browser; save results locally.",
   "author": {
     "name": "anderson-spider"
@@ -12,6 +12,12 @@
       "title": "Foreground wait (minutes)",
       "description": "How long a request waits for ChatGPT's answer before it keeps going as a background job.",
       "default": 6
+    },
+    "headlessChromium": {
+      "type": "boolean",
+      "title": "Headless Chromium first",
+      "description": "Try the plugin's own headless Chromium (set up with /chatgpt-login) before the browsers you log in to yourself.",
+      "default": true
     },
     "backgroundMinutes": {
       "type": "number",

@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 import { ASK_DESCRIPTION, IMAGE_DESCRIPTION, PROMPT } from '../hooks/prompts'
-import { JOBS_DESCRIPTION, ASK_COMMAND_DESCRIPTION, IMAGE_COMMAND_DESCRIPTION, DOCTOR_COMMAND_DESCRIPTION } from '../hooks/tool-schemas'
+import { JOBS_DESCRIPTION, ASK_COMMAND_DESCRIPTION, IMAGE_COMMAND_DESCRIPTION, DOCTOR_COMMAND_DESCRIPTION, LOGIN_COMMAND_DESCRIPTION } from '../hooks/tool-schemas'
 import type { PageState } from '../hooks/model'
 import { fakePage, printed, scriptKind, turns, type PageScript } from './fake-page'
 import { register } from '../hooks/register'
@@ -34,11 +34,27 @@ test("the browser allow covers only the plugin's own calls, never the model's", 
 
 const ran = (exitCode: number, stdout = '', stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
 
+const PLUGIN_VERSION = '9.9.9'
+/** The check that comes first in every request: whether the headless Chromium's Playwright is installed. */
+const PW_CHECK = 'exists /home/u/.claude/chatgpt/playwright/runtime/node_modules/playwright-core/package.json'
+
 const CHROME_PREFIX = 'mcp__claude-in-chrome__'
 const BUILTIN_PREFIX = 'mcp__Claude_Browser__'
 const IMAGE_BASE64 = 'QUJD'
 
 type WorldState = PageScript & {
+  /** `missing`: no playwright-core under the helper's home; `not-installed`: the helper's start says Chromium is missing; `ok`: it starts. */
+  playwright: 'missing' | 'not-installed' | 'ok'
+  /** Whether the helper answers on its socket. */
+  helperRunning: boolean
+  helperTabs: string[]
+  /** What the helper's `/tabs` fails with: the browser did not launch. */
+  launchError?: string
+  /** `missing`: the host cannot start node. */
+  node?: 'missing'
+  /** What `helper.mjs login` prints. */
+  loginReply?: string
+  home: string | undefined
   terminal: 'ok' | 'down'
   terminalBrowsers: { key: string; tabs: number[] }[]
   chrome: 'ok' | 'down'
@@ -58,6 +74,10 @@ type WorldState = PageScript & {
 
 function world(on: On, init: Partial<WorldState> = {}) {
   const state: WorldState = {
+    playwright: 'missing',
+    helperRunning: false,
+    helperTabs: [],
+    home: '/home/u',
     terminal: 'down',
     terminalBrowsers: [{ key: 'k', tabs: [1] }],
     chrome: 'ok',
@@ -77,6 +97,7 @@ function world(on: On, init: Partial<WorldState> = {}) {
   const page = fakePage(state)
   let nextChromeTab = 7
   let nextTerminalTab = 2
+  let nextHelperTab = 1
   /** Everything that reached the host, in order. */
   const log: string[] = []
   const mcp: { server: string; tool: string; args: Record<string, unknown> }[] = []
@@ -162,10 +183,45 @@ function world(on: On, init: Partial<WorldState> = {}) {
     return { deny: `the fake host has no ${name}` }
   })
 
+  // The headless Chromium's helper on its socket: each route answered from the same page fake.
+  on('http.fetch', (_$, e) => {
+    const route = e.url.replace('http://chatgpt-helper', '')
+    log.push(`helper ${route}`)
+    if (!state.helperRunning) return { deny: 'connect ECONNREFUSED' }
+    const body = JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>
+    const reply = (value: Record<string, unknown>) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ status: 'ok', ...value }) } })
+    if (route === '/health') return reply({ version: PLUGIN_VERSION })
+    if (route === '/tabs') return state.launchError ? { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ status: 'error', message: state.launchError }) } } : reply({ tabs: state.helperTabs })
+    if (route === '/open') {
+      const tab = String(nextHelperTab++)
+      state.helperTabs.push(tab)
+      return reply({ tab })
+    }
+    if (route === '/wait') return reply({ ok: script(body.tab, `return JSON.stringify(Boolean(${String(body.fn)}))`) === 'true' })
+    // The page script's own return value: the text it built with JSON.stringify.
+    if (route === '/eval') return reply({ value: script(body.tab, String(body.body)) })
+    if (route === '/upload') return reply({})
+    return { deny: `the fake helper has no ${route}` }
+  })
+
+  on('fs.exists', (_$, e) => {
+    log.push(`exists ${e.path}`)
+    return { value: state.playwright !== 'missing' }
+  })
+
   on('process.run', (_$, e) => {
     const argv = [...e.argv]
     processes.push(argv)
     const [command, subcommand] = argv
+    if (command === 'node') {
+      const verb = argv[2]
+      log.push(`process node helper ${verb}`)
+      if (state.node === 'missing') return { deny: 'spawn node ENOENT' }
+      if (verb === 'login') return ran(0, state.loginReply ?? '{"status":"opened"}\n')
+      if (state.playwright === 'not-installed') return ran(0, '{"status":"not-installed","missing":"browser"}\n')
+      state.helperRunning = true
+      return ran(0, '{"status":"ok"}\n')
+    }
     if (command === 'terminal-browser') {
       if (state.terminal === 'down') {
         log.push(`process terminal-browser ${subcommand}`)
@@ -203,12 +259,16 @@ function world(on: On, init: Partial<WorldState> = {}) {
     return ran(0)
   })
 
-  on('env.get', (_$, e) => ({ value: e.name === 'TMPDIR' ? state.tmpdir : e.name === 'CLAUDE_CODE_ENTRYPOINT' ? state.entrypoint : undefined }))
+  on('env.get', (_$, e) => ({
+    value: e.name === 'TMPDIR' ? state.tmpdir : e.name === 'CLAUDE_CODE_ENTRYPOINT' ? state.entrypoint : e.name === 'HOME' ? state.home : undefined,
+  }))
   on('fs.stat', (_$, e) => {
     log.push(`stat ${e.path}`)
     return { value: { kind: 'file' as const, size: 12, mtimeMs: 0, isLink: false } }
   })
   on('fs.read', (_$, e) => {
+    // The plugin's own manifest, read once per load for its version.
+    if (e.path.endsWith('/.claude-plugin/plugin.json')) return { value: JSON.stringify({ version: PLUGIN_VERSION }) }
     log.push(`read ${e.path} ${e.as}`)
     return { value: { base64: 'aGk=' } }
   })
@@ -306,7 +366,7 @@ function withoutDescriptions(value: unknown): unknown {
   return value
 }
 
-test('session start registers the ask, image and jobs tools and the three commands, in that order, with their exact payloads', async ($, on) => {
+test('session start registers the ask, image and jobs tools and the four commands, in that order, with their exact payloads', async ($, on) => {
   const order: string[] = []
   const tools: unknown[] = []
   const commands: unknown[] = []
@@ -323,6 +383,7 @@ test('session start registers the ask, image and jobs tools and the three comman
     'command chatgpt-ask',
     'command chatgpt-image',
     'command chatgpt-doctor',
+    'command chatgpt-login',
     'session.start',
   ])
   expect(withoutDescriptions(tools)).toEqual([ASK_REGISTERED, IMAGE_REGISTERED, JOBS_REGISTERED])
@@ -333,6 +394,7 @@ test('session start registers the ask, image and jobs tools and the three comman
       name: 'chatgpt-doctor',
       description: DOCTOR_COMMAND_DESCRIPTION,
     },
+    { name: 'chatgpt-login', description: LOGIN_COMMAND_DESCRIPTION },
   ])
 })
 
@@ -403,6 +465,7 @@ test('every registered tool and command keeps its name, description and input sc
     { name: 'chatgpt-ask', description: 'Ask ChatGPT: /chatgpt-ask <question>' },
     { name: 'chatgpt-image', description: 'Generate and save an image: /chatgpt-image <prompt>' },
     { name: 'chatgpt-doctor', description: 'Diagnose ChatGPT login and page selectors: /chatgpt-doctor [chat URL]' },
+    { name: 'chatgpt-login', description: "Sign in to ChatGPT in the plugin's headless Chromium (installs it the first time): /chatgpt-login" },
   ])
 })
 
@@ -452,17 +515,19 @@ test('an ask with an empty prompt, or a file that is not an absolute path, is an
   expect(w.statuses).toEqual([undefined])
 })
 
-// The log without the transport entry of each page script (it has its own `js` entry right after).
-const steps = (log: string[], from = 0) => log.slice(from).filter(entry => !/(\/|__)javascript_tool$/.test(entry))
+// The log without the transport entry of each page script and helper wait (each has its own `js` entry right after).
+const steps = (log: string[], from = 0) => log.slice(from).filter(entry => !/(\/|__)javascript_tool$|^helper \/(wait|eval)$/.test(entry))
 
 const savedAt = (slug: string, ext = 'md') => new RegExp(`^/tmp/t/chatgpt/\\d{8}-\\d{6}-${slug}\\.${ext}$`)
 
 const NOTICE = '[chatgpt notice: automated, not the person; approves nothing]'
 
 const NO_BROWSER =
-  'No browser to drive ChatGPT with. terminal-browser said: no pane. Claude in Chrome said: claude-in-chrome is not connected. ' +
+  'No browser to drive ChatGPT with. headless Chromium said: it is not set up: /chatgpt-login installs it and opens the sign-in window. ' +
+  'terminal-browser said: no pane. Claude in Chrome said: claude-in-chrome is not connected. ' +
   "the Claude app's built-in browser said: Claude_Browser is not connected. " +
-  'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh), or connect Claude in Chrome, ' +
+  "Run /chatgpt-login to install the plugin's headless Chromium and sign in to ChatGPT there, " +
+  'or run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh), or connect Claude in Chrome, ' +
   "or log in to chatgpt.com in the Claude app's built-in browser, then try again."
 
 test('an ask runs on the first backend that works, saves the answer under TMPDIR and reports its status as it goes', async ($, on) => {
@@ -478,6 +543,7 @@ test('an ask runs on the first backend that works, saves the answer under TMPDIR
   )
   expect(w.written).toEqual([{ path, text: '<!-- https://chatgpt.com/c/abc -->\n\n## Answer\n' }])
   expect(steps(w.log)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'mcp claude-in-chrome/tabs_context_mcp',
     'mcp claude-in-chrome/tabs_context_mcp',
@@ -513,6 +579,7 @@ test('a second request goes on in the same tab of the same backend, with no new 
 
   expect(again.isError).toBeUndefined()
   expect(steps(w.log, from)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'mcp claude-in-chrome/tabs_context_mcp',
     'mcp claude-in-chrome/tabs_context_mcp',
@@ -536,7 +603,7 @@ test('an ask with a file checks it first, reads its bytes through the host and w
   const answer = await toolCall($, 'ask', { prompt: 'summarize', files: ['/work/notes.md'] })
 
   expect(answer.isError).toBeUndefined()
-  expect(steps(w.log).slice(0, 3)).toEqual(['stat /work/notes.md', 'process terminal-browser ls', 'mcp claude-in-chrome/tabs_context_mcp'])
+  expect(steps(w.log).slice(0, 3)).toEqual(['stat /work/notes.md', PW_CHECK, 'process terminal-browser ls'])
   expect(w.log).toContain('read /work/notes.md bytes')
   // The first two checks of the composer answer false: the plugin waits through `sleep`, 250 ms a time.
   expect(w.processes.filter(argv => argv[0] === 'sleep')).toEqual([['sleep', '0.25'], ['sleep', '0.25']])
@@ -664,7 +731,7 @@ test('/chatgpt-ask answers with the usage for a blank question, and otherwise wi
 // What ask and image answer when the browser opens but ChatGPT is not usable in it: the backends the plugin tries are
 // named in the advice, and the plugin's tab never types credentials.
 const NOT_READY_ADVICE =
-  "Ask the user to log in to chatgpt.com in the browser the plugin uses (terminal-browser, Claude in Chrome or the Claude app's built-in browser), " +
+  "Ask the user to log in to chatgpt.com in the browser the plugin uses (headless Chromium, terminal-browser, Claude in Chrome or the Claude app's built-in browser), " +
   'or to clear what the page shows, and try again; never type credentials.'
 
 test('a logged-out page ends ask and image with the not-ready text that names every backend, byte for byte', async ($, on) => {
@@ -739,6 +806,7 @@ test('/chatgpt-doctor reports the page parts on the chosen backend and clears it
   expect(answer.text).toBe([...DOCTOR_REPORT, '', 'Everything the plugin relies on is in place.'].join('\n'))
   expect(w.statuses).toEqual(['ChatGPT: checking the page', undefined])
   expect(steps(w.log)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'mcp claude-in-chrome/tabs_context_mcp',
     'mcp claude-in-chrome/tabs_context_mcp',
@@ -807,12 +875,13 @@ test('/chatgpt-doctor with no backend answers the chooser text after a cross', a
   expect(w.statuses).toEqual([undefined])
 })
 
-test('the backends are tried in the order terminal-browser, Claude in Chrome, the built-in browser', async ($, on) => {
+test('the backends are tried in the order headless Chromium, terminal-browser, Claude in Chrome, the built-in browser', async ($, on) => {
   const w = world(on, { chrome: 'down' })
 
   await commandRun($, 'chatgpt-doctor')
 
   expect(w.log).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'mcp claude-in-chrome/tabs_context_mcp',
     'tool mcp__claude-in-chrome__tabs_context_mcp',
@@ -829,6 +898,7 @@ test('the first backend that works is used and the ones after it are not touched
   expect(answer.text?.split('\n')[0]).toBe('✓ browser: terminal-browser')
   expect(terminal.mcp).toEqual([])
   expect(steps(terminal.log)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'process terminal-browser new-tab https://chatgpt.com/',
     'process terminal-browser wait k:2',
@@ -844,6 +914,7 @@ test('outside the desktop app the built-in browser is the last resort and is dri
 
   expect(answer.text?.split('\n')[0]).toBe("✓ browser: the Claude app's built-in browser")
   expect(steps(w.log)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'mcp claude-in-chrome/tabs_context_mcp',
     'tool mcp__claude-in-chrome__tabs_context_mcp',
@@ -856,13 +927,13 @@ test('outside the desktop app the built-in browser is the last resort and is dri
   ])
 })
 
-test('inside the desktop app the built-in browser is tried first, before Chrome or terminal-browser', async ($, on) => {
+test('inside the desktop app the built-in browser is tried right after the headless Chromium, before Chrome or terminal-browser', async ($, on) => {
   const w = world(on, { entrypoint: 'claude-desktop', terminal: 'ok', builtin: 'ok' })
 
   const answer = await commandRun($, 'chatgpt-doctor')
 
   expect(answer.text?.split('\n')[0]).toBe("✓ browser: the Claude app's built-in browser")
-  expect(steps(w.log)[0]).toBe('mcp Claude_Browser/tabs_context')
+  expect(steps(w.log).slice(0, 2)).toEqual([PW_CHECK, 'mcp Claude_Browser/tabs_context'])
   expect(steps(w.log).some(step => step.includes('claude-in-chrome') || step.startsWith('process terminal-browser'))).toBe(false)
 })
 
@@ -872,7 +943,7 @@ test('inside the desktop app a down built-in browser falls back to the usual ord
   const answer = await commandRun($, 'chatgpt-doctor')
 
   expect(answer.text?.split('\n')[0]).toBe('✓ browser: Claude in Chrome')
-  expect(steps(w.log).slice(0, 3)).toEqual(['mcp Claude_Browser/tabs_context', 'tool mcp__Claude_Browser__tabs_context', 'process terminal-browser ls'])
+  expect(steps(w.log).slice(0, 4)).toEqual([PW_CHECK, 'mcp Claude_Browser/tabs_context', 'tool mcp__Claude_Browser__tabs_context', 'process terminal-browser ls'])
 })
 
 test('the plugin tab is forgotten when another backend is chosen, so a tab id is never used in the wrong backend', async ($, on) => {
@@ -890,6 +961,7 @@ test('the plugin tab is forgotten when another backend is chosen, so a tab id is
 
   expect(second.text?.split('\n')[0]).toBe('✓ browser: terminal-browser')
   expect(steps(w.log, from)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'process terminal-browser new-tab https://chatgpt.com/',
     'process terminal-browser wait chrome:2',
@@ -902,6 +974,7 @@ test('the plugin tab is forgotten when another backend is chosen, so a tab id is
   const fromThird = w.log.length
   await commandRun($, 'chatgpt-doctor')
   expect(steps(w.log, fromThird)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'process terminal-browser eval chrome:2 leave',
     'process terminal-browser wait chrome:2',
@@ -909,6 +982,171 @@ test('the plugin tab is forgotten when another backend is chosen, so a tab id is
     'process terminal-browser wait chrome:2',
     'process terminal-browser eval chrome:2 doctor',
   ])
+})
+
+test('an ask runs on the headless Chromium once it is set up: the helper is started, then every page script goes through its socket', async ($, on) => {
+  const w = world(on, { playwright: 'ok', terminal: 'ok' })
+
+  const answer = await toolCall($, 'ask', { prompt: 'Capital of France?' })
+
+  expect(answer.isError).toBeUndefined()
+  expect(answer.result).toContain('## Answer')
+  expect(steps(w.log)).toEqual([
+    PW_CHECK,
+    'helper /health',
+    'process node helper start',
+    'helper /tabs',
+    'helper /open',
+    'js wait 1',
+    'js state 1',
+    'js model rows 1',
+    'js model click 1',
+    'js model rows 1',
+    'js model close 1',
+    'js send 1',
+    'js state 1',
+    'js state 1',
+    'js read 1',
+  ])
+  expect(w.mcp).toEqual([])
+
+  // The next request finds the helper running and reuses its tab.
+  w.setPages([{ turns: turns(1) }, { turns: turns(2), length: 3 }, { turns: turns(2), length: 3 }])
+  const from = w.log.length
+  await toolCall($, 'ask', { prompt: 'again', chatUrl: 'https://chatgpt.com/c/abc' })
+  expect(steps(w.log, from).slice(0, 5)).toEqual([PW_CHECK, 'helper /health', 'helper /tabs', 'js leave 1', 'js wait 1'])
+})
+
+test('a logged-out headless page asks for /chatgpt-login instead of naming every browser', async ($, on) => {
+  world(on, { playwright: 'ok', pages: [{ composer: false, login: true, href: 'https://chatgpt.com/auth/login' }] })
+
+  expect(await toolCall($, 'ask', { prompt: 'hi' })).toEqual({
+    result:
+      'ChatGPT is not ready in the browser (at https://chatgpt.com/auth/login). ' +
+      'Ask the user to run /chatgpt-login, sign in to chatgpt.com in the window it opens and quit that browser (⌘Q on macOS), then try again; never type credentials.',
+    isError: true,
+  })
+})
+
+test('/chatgpt-doctor names the headless Chromium when it is the backend', async ($, on) => {
+  world(on, { playwright: 'ok' })
+
+  const answer = await commandRun($, 'chatgpt-doctor')
+
+  expect(answer.text?.split('\n')[0]).toBe('✓ browser: headless Chromium')
+})
+
+test('a headless Chromium whose browser will not launch is skipped with its reason, and the next backend serves', async ($, on) => {
+  const w = world(on, { playwright: 'ok', launchError: 'another Chromium holds the profile (the /chatgpt-login window?): quit it (⌘Q on macOS), then try again', chrome: 'down' })
+
+  const answer = await commandRun($, 'chatgpt-doctor')
+
+  expect(answer.text).toContain('headless Chromium said: another Chromium holds the profile (the /chatgpt-login window?): quit it (⌘Q on macOS), then try again.')
+  expect(w.log.slice(0, 4)).toEqual([PW_CHECK, 'helper /health', 'process node helper start', 'helper /tabs'])
+})
+
+test('/chatgpt-login runs the helper login, answers what to do next and forgets the plugin tab', async ($, on) => {
+  const w = world(on, { playwright: 'ok' })
+  await commandRun($, 'chatgpt-doctor')
+  const from = w.log.length
+
+  const answer = await commandRun($, 'chatgpt-login')
+
+  expect(answer).toEqual({
+    text: "A Chromium window opened on chatgpt.com. Sign in there, then quit that browser (⌘Q on macOS; closing the window leaves it running): ChatGPT requests run in the plugin's headless Chromium after that.",
+  })
+  expect(w.log.slice(from)).toEqual(['process node helper login'])
+  expect(w.processes.at(-1)?.[1]).toMatch(/\/helper\/helper\.mjs$/)
+  expect(w.processes.at(-1)?.slice(2)).toEqual(['login', '--home', '/home/u/.claude/chatgpt/playwright'])
+  expect(w.statuses.slice(-2)).toEqual(['ChatGPT: preparing the headless Chromium (the first run downloads it)', undefined])
+
+  // The tab the doctor opened is not reused: the next request opens a new one.
+  const next = w.log.length
+  await commandRun($, 'chatgpt-doctor')
+  expect(steps(w.log, next)).toContain('helper /open')
+})
+
+test('with "Headless Chromium first" off the headless Chromium is never tried, and the texts leave it out', { options: { headlessChromium: false } }, async ($, on) => {
+  const w = world(on, { playwright: 'ok', chrome: 'down' })
+
+  const answer = await commandRun($, 'chatgpt-doctor')
+
+  expect(w.log).not.toContain(PW_CHECK)
+  expect(w.processes.some(argv => argv[0] === 'node')).toBe(false)
+  expect(answer.text).not.toContain('headless Chromium')
+})
+
+// A headless page a check holds, then the pages an ask goes through in the next backend.
+const HELD_THEN_ASK: Partial<PageState>[] = [
+  { composer: false, href: 'https://chatgpt.com/', blocker: 'Confirme que é humano' },
+  { turns: turns(0) },
+  { turns: turns(1), length: 5 },
+  { turns: turns(1), length: 5 },
+]
+
+const HELD_NOTE =
+  'Note: ChatGPT was not ready in headless Chromium (at https://chatgpt.com/), so this request ran in Claude in Chrome; /chatgpt-doctor shows what holds it.'
+
+test('a headless page held by something other than a login moves the ask on to the next backend, which keeps its own tab', async ($, on) => {
+  const w = world(on, { playwright: 'ok', pages: HELD_THEN_ASK })
+
+  const answer = await toolCall($, 'ask', { prompt: 'hi' })
+
+  const path = w.written[0]?.path
+  expect(answer).toEqual({ result: `${HELD_NOTE}\nChatGPT's answer (unverified; check facts before using them) saved to ${path}\nChat: https://chatgpt.com/c/abc\n\n## Answer` })
+  expect(steps(w.log).filter(entry => !entry.startsWith('js '))).toEqual([
+    PW_CHECK,
+    'helper /health',
+    'process node helper start',
+    'helper /tabs',
+    'helper /open',
+    'process terminal-browser ls',
+    'mcp claude-in-chrome/tabs_context_mcp',
+    'mcp claude-in-chrome/tabs_context_mcp',
+    'mcp claude-in-chrome/tabs_create_mcp',
+    'mcp claude-in-chrome/navigate',
+  ])
+
+  // The next request tries the headless Chromium again in its own tab, then goes back to the Chrome tab.
+  w.setPages(HELD_THEN_ASK)
+  const from = w.log.length
+  expect((await toolCall($, 'ask', { prompt: 'hi' })).result).toContain(HELD_NOTE)
+  const again = steps(w.log, from)
+  expect(again).toContain('js leave 1')
+  expect(again).toContain('js leave 7')
+  expect(again).not.toContain('helper /open')
+  expect(again).not.toContain('mcp claude-in-chrome/tabs_create_mcp')
+
+  // Signing in drops only the headless Chromium's tab: the Chrome tab stays the plugin's.
+  await commandRun($, 'chatgpt-login')
+  w.setPages(HELD_THEN_ASK)
+  const after = w.log.length
+  expect((await toolCall($, 'ask', { prompt: 'hi' })).result).toContain(HELD_NOTE)
+  expect(steps(w.log, after)).toContain('helper /open')
+  expect(steps(w.log, after)).toContain('js leave 7')
+  expect(steps(w.log, after)).not.toContain('mcp claude-in-chrome/tabs_create_mcp')
+})
+
+test('a held headless page with no other browser to take the ask says what held it, then what each other browser answered', async ($, on) => {
+  world(on, { playwright: 'ok', chrome: 'down', pages: HELD_THEN_ASK })
+
+  expect(await toolCall($, 'ask', { prompt: 'hi' })).toEqual({
+    result:
+      'ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Confirme que é humano". ' +
+      "Nobody can clear what the plugin's headless Chromium shows, so the plugin tries the other browsers in its place. " +
+      'If it persists, the user can turn off "Headless Chromium first" (claude plugin configure chatgpt@spider-claude-mods) so requests skip it; ' +
+      'never type credentials.\nThe other browsers: No browser to drive ChatGPT with. terminal-browser said: no pane. ' +
+      "Claude in Chrome said: claude-in-chrome is not connected. the Claude app's built-in browser said: Claude_Browser is not connected. " +
+      'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh), or connect Claude in Chrome, ' +
+      "or log in to chatgpt.com in the Claude app's built-in browser, then try again.",
+    isError: true,
+  })
+})
+
+test('/chatgpt-login without node says what it needs', async ($, on) => {
+  world(on, { node: 'missing' })
+
+  expect(await commandRun($, 'chatgpt-login')).toEqual({ text: '✗ node was not found: the headless Chromium needs Node.js 20 or newer on PATH' })
 })
 
 test('MCP calls of a reachable server go through $.mcp.call with the tool and arguments the backend asked for', async ($, on) => {
@@ -958,7 +1196,8 @@ test('the route is remembered for each server on its own', async ($, on) => {
   const from = w.log.length
   await commandRun($, 'chatgpt-doctor')
 
-  expect(steps(w.log, from).slice(0, 4)).toEqual([
+  expect(steps(w.log, from).slice(0, 5)).toEqual([
+    PW_CHECK,
     'process terminal-browser ls',
     'tool mcp__claude-in-chrome__tabs_context_mcp',
     'mcp Claude_Browser/tabs_context',

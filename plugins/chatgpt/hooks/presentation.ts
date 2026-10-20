@@ -77,6 +77,7 @@ export function jobMessage(job: Job, outcome: Outcome): string {
   if (outcome.paths?.length) lines.push(`Saved to: ${outcome.paths.join(', ')}`)
   if (outcome.chatUrl) lines.push(`Chat: ${outcome.chatUrl}`)
   if (outcome.timedOut) lines.push('Timed out: the chat may still finish.')
+  if (outcome.note) lines.push(outcome.note)
   if (outcome.error) lines.push(`Note: ${outcome.error}`)
   if (outcome.ok) lines.push(DONE_NOTE[job.kind])
   return lines.join('\n')
@@ -85,8 +86,9 @@ export function jobMessage(job: Job, outcome: Outcome): string {
 export function askCommandAnswer(outcome: Outcome) {
   if (!outcome.ok) return { text: outcome.text }
   const path = outcome.paths?.[0]
+  const note = outcome.note ? `\n${outcome.note}` : ''
   return {
-    text: `${outcome.markdown}\n\n— ChatGPT, ${outcome.chatUrl}\nSaved to ${path}`,
+    text: `${outcome.markdown}\n\n— ChatGPT, ${outcome.chatUrl}\nSaved to ${path}${note}`,
     context: [`The user asked ChatGPT through /chatgpt-ask; its answer is saved to ${path} (chat ${outcome.chatUrl}).`],
   }
 }

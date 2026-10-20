@@ -6,11 +6,12 @@ import { limitMs } from './settings'
 import type { Browser, Outcome, ProcessRunner, Request, RequestDeps, TabHolder } from './model'
 import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
 import { PROMPT } from './prompts'
-import { DOCTOR_COMMAND_DESCRIPTION, TOOLS } from './tool-schemas'
+import { DOCTOR_COMMAND_DESCRIPTION, LOGIN_COMMAND_DESCRIPTION, TOOLS } from './tool-schemas'
 import { type Candidate, chooseBrowser } from './chooser'
 import { type Backend, backendsFor, ownCallAllowed } from './backends'
 import { type McpCall, type McpHost, mcpCallOf } from './mcp-call'
 import type { BrowserDeps } from './page-browser'
+import { PLAYWRIGHT, type PlaywrightHost, signIn } from './playwright-browser'
 import { bytesOf } from './upload'
 import { serve } from './tools'
 
@@ -19,8 +20,10 @@ const queue = taskQueue()
 const tab: TabHolder = {}
 const jobs = createJobs()
 
-// The backend the plugin's tab belongs to: a tab id means nothing in another backend.
+// The backend the plugin's tab belongs to: a tab id means nothing in another backend. Each backend's own tab is kept
+// while another holds the plugin's tab, so a request that moves on and back (see performRequest) reuses it.
 let tabOwner: string | undefined
+const tabsOf = new Map<string, string | undefined>()
 
 // The defaults of the `foregroundMinutes` and `backgroundMinutes` settings, as plugin.json declares them.
 const FOREGROUND_MINUTES = 6
@@ -30,6 +33,9 @@ const BACKGROUND_MINUTES = 30
 // The `foregroundMinutes` and `backgroundMinutes` settings, refreshed by each register.
 let foregroundMs = limitMs(undefined, FOREGROUND_MINUTES)
 let backgroundMs = limitMs(undefined, BACKGROUND_MINUTES)
+
+// The `headlessChromium` setting: off leaves the plugin's own browser out, so only the ones the user logs in to are tried.
+let headlessFirst = true
 
 function processOf($: EngineInterface): ProcessRunner {
   return (argv, init) => $.process.run(argv, init)
@@ -58,9 +64,25 @@ function callOf($: EngineInterface, server: string): McpCall {
   return call
 }
 
-// The backends in this session's order (see backendsFor).
+// The plugin's version, which the headless Chromium's helper must match; read from plugin.json once per load.
+let pluginVersion: string | undefined
+
+async function playwrightHostOf($: EngineInterface): Promise<PlaywrightHost> {
+  pluginVersion ??= (JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version: string }).version
+  return {
+    fetch: (url, init) => $.http.fetch(url, init),
+    run: processOf($),
+    exists: path => $.fs.exists(path),
+    home: await $.env.get('HOME'),
+    root: $.plugin.root,
+    version: pluginVersion,
+  }
+}
+
+// The backends in this session's order (see backendsFor), without the headless Chromium when the setting is off.
 async function backendsOf($: EngineInterface): Promise<Backend[]> {
-  return backendsFor(await $.env.get('CLAUDE_CODE_ENTRYPOINT'))
+  const backends = backendsFor(await $.env.get('CLAUDE_CODE_ENTRYPOINT'))
+  return headlessFirst ? backends : backends.filter(backend => !('helper' in backend))
 }
 
 // The backends, each opened only when the chooser gets to it.
@@ -75,19 +97,21 @@ function candidatesOf($: EngineInterface, backends: Backend[]): Candidate[] {
     },
     now: () => Date.now(),
   })
-  return backends.map(backend =>
-    'server' in backend
-      ? { name: backend.name, hint: backend.hint, open: () => backend.open(deps(backend.server)) }
-      : { name: backend.name, hint: backend.hint, open: () => backend.open(run) },
-  )
+  return backends.map(backend => {
+    if ('server' in backend) return { name: backend.name, hint: backend.hint, open: () => backend.open(deps(backend.server)) }
+    if ('helper' in backend) return { name: backend.name, hint: backend.hint, open: async () => backend.open(await playwrightHostOf($)) }
+    return { name: backend.name, hint: backend.hint, open: () => backend.open(run) }
+  })
 }
 
-// Picks the backend, and starts the plugin's tab afresh when it differs from the one that opened that tab.
-async function pickBrowser($: EngineInterface): Promise<{ browser: Browser; name: string } | string> {
-  const chosen = await chooseBrowser(candidatesOf($, await backendsOf($)))
+// Picks the backend, leaving out the one `skip` names, and swaps in that backend's own tab when it differs from the
+// one that holds the plugin's tab.
+async function pickBrowser($: EngineInterface, skip?: string): Promise<{ browser: Browser; name: string } | string> {
+  const chosen = await chooseBrowser(candidatesOf($, (await backendsOf($)).filter(({ name }) => name !== skip)))
   if (typeof chosen === 'string') return chosen
   if (tabOwner !== chosen.name) {
-    tab.id = undefined
+    if (tabOwner !== undefined) tabsOf.set(tabOwner, tab.id)
+    tab.id = tabsOf.get(chosen.name)
     tabOwner = chosen.name
   }
   return chosen
@@ -96,8 +120,8 @@ async function pickBrowser($: EngineInterface): Promise<{ browser: Browser; name
 function requestDeps($: EngineInterface): RequestDeps {
   const run = processOf($)
   return {
-    browser: async () => {
-      const picked = await pickBrowser($)
+    browser: async skip => {
+      const picked = await pickBrowser($, skip)
       return typeof picked === 'string' ? picked : picked.browser
     },
     attachments: { stat: path => $.fs.stat(path) },
@@ -152,6 +176,7 @@ function handlers($: EngineInterface) {
 export const register: Register = (on, options) => {
   foregroundMs = limitMs(options?.foregroundMinutes, FOREGROUND_MINUTES)
   backgroundMs = limitMs(options?.backgroundMinutes, BACKGROUND_MINUTES)
+  headlessFirst = options?.headlessChromium !== false
 
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
@@ -167,6 +192,7 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'chatgpt-ask', description: TOOLS.ask.command.description })
     await $.command.register({ name: 'chatgpt-image', description: TOOLS.image.command.description })
     await $.command.register({ name: 'chatgpt-doctor', description: DOCTOR_COMMAND_DESCRIPTION })
+    await $.command.register({ name: 'chatgpt-login', description: LOGIN_COMMAND_DESCRIPTION })
     return next(e)
   })
 
@@ -196,6 +222,21 @@ export const register: Register = (on, options) => {
     const outcome = await handlers($).runNow(request)
     return imageCommandAnswer(outcome)
   })
+
+  // Signing in stops the helper, so it waits for the requests queued before it, and the plugin's tab starts afresh.
+  on('command.run', { command: 'chatgpt-login' }, async $ =>
+    queue(async () => {
+      $.ui.status('ChatGPT: preparing the headless Chromium (the first run downloads it)')
+      try {
+        // Only the headless Chromium's tab goes: the helper restarts. Another backend's tab stays the plugin's.
+        if (tabOwner === PLAYWRIGHT) tab.id = undefined
+        else tabsOf.delete(PLAYWRIGHT)
+        return { text: await signIn(await playwrightHostOf($)) }
+      } finally {
+        $.ui.status(undefined)
+      }
+    }),
+  )
 
   on('command.run', { command: 'chatgpt-doctor' }, async ($, e) => {
     const chatUrl = chatUrlOf(e.args)

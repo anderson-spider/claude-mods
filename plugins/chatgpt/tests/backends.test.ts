@@ -4,6 +4,7 @@ import { BUILTIN, BUILTIN_SERVER } from '../hooks/builtin-browser'
 import { CHROME, CHROME_SERVER } from '../hooks/chrome-browser'
 import { ask } from '../hooks/ask'
 import { chooseBrowser } from '../hooks/chooser'
+import { PLAYWRIGHT, PLAYWRIGHT_HINT } from '../hooks/playwright-browser'
 import { TERMINAL_BROWSER } from '../hooks/terminal-browser'
 import { fakeBrowser } from './fake-page'
 
@@ -34,25 +35,26 @@ const MCP = [
   },
 ]
 
-const TERMINAL_HINT = 'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh)'
+const TERMINAL_HINT = 'run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh)'
 
 test('the backends are tried in a fixed order, and every MCP one has a row in this table', () => {
-  expect(BACKENDS.map(backend => backend.name)).toEqual([TERMINAL_BROWSER, CHROME, BUILTIN])
+  expect(BACKENDS.map(backend => backend.name)).toEqual([PLAYWRIGHT, TERMINAL_BROWSER, CHROME, BUILTIN])
   const servers = BACKENDS.flatMap(backend => ('server' in backend ? [backend.server] : []))
   expect(servers).toEqual(MCP.map(row => row.server))
   expect(OWN_CALLS.map(call => call.prefix)).toEqual(MCP.map(row => `mcp__${row.server}__`))
 })
 
-test('inside the desktop app the built-in browser comes first; any other entrypoint keeps the fixed order', () => {
-  expect(backendsFor('claude-desktop').map(backend => backend.name)).toEqual([BUILTIN, TERMINAL_BROWSER, CHROME])
+test('inside the desktop app the built-in browser comes right after the headless Chromium; any other entrypoint keeps the fixed order', () => {
+  expect(backendsFor('claude-desktop').map(backend => backend.name)).toEqual([PLAYWRIGHT, BUILTIN, TERMINAL_BROWSER, CHROME])
   for (const entrypoint of ['cli', 'sdk-ts', undefined]) expect(backendsFor(entrypoint)).toEqual(BACKENDS)
 })
 
 test("every backend's setup advice is the one its row pins, in the order the chooser strings them together", async () => {
-  expect(BACKENDS.map(backend => backend.hint)).toEqual([TERMINAL_HINT, ...MCP.map(row => row.hint)])
+  expect(BACKENDS.map(backend => backend.hint)).toEqual([PLAYWRIGHT_HINT, TERMINAL_HINT, ...MCP.map(row => row.hint)])
+  expect(PLAYWRIGHT_HINT).toBe("Run /chatgpt-login to install the plugin's headless Chromium and sign in to ChatGPT there")
 
   const none = BACKENDS.map(({ name, hint }) => ({ name, hint, open: async () => 'down' }))
-  const advice = [TERMINAL_HINT, ...MCP.map(row => row.hint)].join(', or ')
+  const advice = [PLAYWRIGHT_HINT, TERMINAL_HINT, ...MCP.map(row => row.hint)].join(', or ')
   expect(await chooseBrowser(none)).toBe(`No browser to drive ChatGPT with. ${BACKENDS.map(({ name }) => `${name} said: down.`).join(' ')} ${advice}, then try again.`)
 })
 

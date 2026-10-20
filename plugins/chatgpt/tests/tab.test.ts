@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Browser, PageState, TabHolder } from '../hooks/model'
 import { blocked, chatUrlError, findTab, LOAD_MS, pageStateOf, prepare } from '../hooks/tab'
-import { COMPOSER, LANDED, LOGIN } from '../hooks/scripts'
+import { COMPOSER, LANDED, LOGIN, leaveScript } from '../hooks/scripts'
 import { fakeBrowser, printed, turns } from './fake-page'
 
 // Every browser call a tab test makes, in order, with the waits it asked for.
@@ -71,6 +71,28 @@ test('findTab never navigates a tab it did not open: a holder id that is gone op
   expect(calls.some(call => call.includes('user'))).toBe(false)
 })
 
+test('findTab leaves a listed tab that is on another site where it is and opens a tab of its own', async () => {
+  const { browser, calls, waits } = recording({ tabs: ['seed'] })
+  const away = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', away: true })
+  browser.js = away.browser.js
+  const holder: TabHolder = { id: 'seed' }
+  const id = await findTab(browser, TARGET, holder)
+
+  expect(id).toBe('t2')
+  expect(holder).toEqual({ id: 't2' })
+  expect(calls).toEqual(['tabs', 'open https://chatgpt.com/'])
+  expect(away.calls).toEqual(['navigate seed https://chatgpt.com/'])
+  expect(waits).toEqual([['t2', `!!${COMPOSER} || ${LOGIN}`, LOAD_MS]])
+})
+
+test("the leave script moves only a tab on chatgpt.com or OpenAI's sign-in pages", () => {
+  const guard = /if \(!(\/.*\/)\.test\(location\.hostname\)\)/.exec(leaveScript(TARGET))?.[1]
+  const sites = new RegExp(String(guard).slice(1, -1))
+  expect(['chatgpt.com', 'cdn.chatgpt.com', 'auth.openai.com', 'auth0.openai.com'].every(host => sites.test(host))).toBe(true)
+  const others = ['example.com', 'notchatgpt.com', 'chatgpt.com.evil.example', 'openai.com', 'platform.openai.com', 'help.openai.com', '']
+  expect(others.some(host => sites.test(host))).toBe(false)
+})
+
 test('prepare answers an invalid chatUrl before the browser is touched', async () => {
   const result = await prepare(untouchable, { chatUrl: 'https://evil.example/c/1' }, { progress: () => {}, tab: {}, backends: [] })
 
@@ -106,6 +128,41 @@ test('prepare on a page that is not ready names the browsers it was given, and q
       'Ask the user to log in to chatgpt.com in the browser the plugin uses (terminal-browser or Claude in Chrome), ' +
       'or to clear what the page shows, and try again; never type credentials.',
   })
+})
+
+test("prepare on a logged-out page of a backend with its own sign-in says that sign-in instead of the general advice", async () => {
+  const { browser } = recording({ tabs: ['seed'], pages: [{ composer: false, login: true, href: 'https://chatgpt.com/auth/login' }] })
+  browser.signIn = 'Ask the user to run /sign-in, then try again.'
+  const result = await prepare(browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: ['terminal-browser'] })
+
+  expect(result).toEqual({
+    ok: false,
+    url: 'https://chatgpt.com/auth/login',
+    error: 'ChatGPT is not ready in the browser (at https://chatgpt.com/auth/login). Ask the user to run /sign-in, then try again.',
+  })
+})
+
+test('prepare on a page held by something other than a login says the backend\'s own not-ready advice when it has one', async () => {
+  const { browser } = recording({ tabs: ['seed'], pages: [{ composer: false, blocker: 'Verify you are human' }] })
+  browser.signIn = 'Sign in.'
+  browser.notReady = 'Nobody can clear it.'
+  const result = await prepare(browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: ['terminal-browser'] })
+
+  expect(result).toEqual({
+    ok: false,
+    url: 'https://chatgpt.com/',
+    error: 'ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Verify you are human". Nobody can clear it.',
+    held: true,
+  })
+})
+
+test('prepare marks a page held only for a backend nobody sees, and never a logged-out page', async () => {
+  const seen = recording({ tabs: ['seed'], pages: [{ composer: false, blocker: 'Verify you are human' }] })
+  expect(await prepare(seen.browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: [] })).not.toHaveProperty('held')
+
+  const loggedOut = recording({ tabs: ['seed'], pages: [{ composer: false, login: true }] })
+  loggedOut.browser.notReady = 'Nobody can clear it.'
+  expect(await prepare(loggedOut.browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: [] })).not.toHaveProperty('held')
 })
 
 test('prepare on a page outside chatgpt.com is not ready, whatever the composer shows', async () => {

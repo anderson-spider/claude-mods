@@ -74,14 +74,14 @@ test('when none opens, the answer says what each one said', async () => {
   expect(text).toContain("the Claude app's built-in browser said: unexpected output from tabs_context.")
 })
 
-test('when none opens, the advice strings the hints of the backends given, in their order', async () => {
+test('when none opens, the advice strings the hints of the backends given, in their order, as a sentence', async () => {
   const none = async () => 'no'
   const advice = async (hints: string[]) => {
     const said = await chooseBrowser(hints.map((hint, i) => ({ name: `b${i}`, hint, open: none })))
     return String(said).replace(/^.*no\. /, '')
   }
 
-  expect(await advice(['run it', 'connect it', 'log in'])).toBe('run it, or connect it, or log in, then try again.')
-  expect(await advice(['connect it', 'run it'])).toBe('connect it, or run it, then try again.')
-  expect(await advice(['run it'])).toBe('run it, then try again.')
+  expect(await advice(['run it', 'connect it', 'log in'])).toBe('Run it, or connect it, or log in, then try again.')
+  expect(await advice(['connect it', 'run it'])).toBe('Connect it, or run it, then try again.')
+  expect(await advice(['Run /x'])).toBe('Run /x, then try again.')
 })

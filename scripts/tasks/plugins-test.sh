@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# npm run plugins:test [-- <name>] — the scripts and hooks tests, every plugin's tests and the codex-computer-use helper
-# tests when the ChatGPT app's node is present; with a name, only that plugin's tests (and its helper's).
+# npm run plugins:test [-- <name>] — the scripts and hooks tests, every plugin's tests, the chatgpt helper tests and the
+# codex-computer-use helper tests when the ChatGPT app's node is present; with a name, only that plugin's tests (and its helper's).
 # A failure does not stop the rest; the task fails at the end and names what failed.
 set -euo pipefail
 . scripts/tasks/lib.sh
@@ -24,6 +24,10 @@ for p in "${dirs[@]}"; do
     echo "==> $n: skipped, skills only"
   fi
 done
+if [ -z "$name" ] || [ "$name" = chatgpt ]; then
+  echo "==> chatgpt helper"
+  node --test plugins/chatgpt/helper/test/*.test.mjs || failed+=(chatgpt-helper)
+fi
 if [ -z "$name" ] || [ "$name" = codex-computer-use ]; then
   cua_node=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
   if [ -x "$cua_node" ]; then
