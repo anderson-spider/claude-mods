@@ -19,10 +19,10 @@ For ACL updates, GET `/tailnet/-/acl`, then POST with its quoted ETag in `ifMatc
 
 ## Privacy
 
-The key comes only from the `apiKey` option, not from tool input or the environment. It is sent only in the `Authorization` header to the Tailscale API and never appears in a result or error. On every call the plugin reads the project and local settings; if either declares `apiKey` for this plugin, or the settings cannot be read, the call is refused and nothing is sent, because the repository could otherwise choose which account the key is used under. Requests go only to the Tailscale API. Read responses remove named secrets and fields ending in `Key`, `Secret` or `Token`; write responses are unfiltered, so handle new secrets privately.
+The key comes only from the `apiKey` option, not from tool input or the environment. It is sent only in the `Authorization` header to the Tailscale API, and the plugin's own messages never include it. On every call the plugin reads the project and local settings; if either declares `apiKey` for this plugin, or the settings cannot be read, the call is refused and nothing is sent, because the repository could otherwise choose which account the key is used under. Requests go only to the Tailscale API. Read responses remove the fields `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` and `token`, and any field whose name ends in `Key`, `Secret` or `Token`; write responses are unfiltered, so handle new secrets privately.
 
 ## Tests
 
-Pure API, key and host tests use fake fetches and settings: key sources and refusals, URL refusals, whole-tailnet deletion, redaction, registration and ETag/If-Match behavior. They do not exercise a real tailnet.
+Pure API, key and host tests use fake fetches and settings: key sources and refusals, path refusals, whole-tailnet deletion, redaction, registration and ETag/If-Match behavior. They do not exercise a real tailnet.
 
 For editing pointers and check commands, see [AGENTS.md](AGENTS.md).

@@ -1,6 +1,6 @@
 # Security
 
-These plugins run code on the machine of whoever installs them: hooks modules run inside Claude Code with the user's permissions, and the codex-computer-use helper runs as a LaunchAgent. Every change merged into `main` reaches installed copies on their next update, so a vulnerability here is a vulnerability on users' machines.
+These plugins run code on the machine of whoever installs them: hooks modules run inside Claude Code with the user's permissions, the codex-computer-use helper runs as a LaunchAgent, and the chatgpt helper runs a headless Chromium as a background process that serves the plugin over a Unix socket. Every change merged into `main` reaches installed copies on their next update, so a vulnerability here is a vulnerability on users' machines.
 
 ## Reporting a vulnerability
 
@@ -10,7 +10,7 @@ Include the affected plugin and version (`version` in its `plugin.json`), the Cl
 
 ## Scope
 
-In scope: the plugins under `plugins/`, the helper under `plugins/codex-computer-use/helper/`, and the scripts under `scripts/` (including `bootstrap.sh`). Examples: a hook that sends a token or API key to a host other than its own, a tool input that escapes its path or API checks, a prompt injection that makes a plugin act without the user's request, or a helper route reachable by another local user.
+In scope: the plugins under `plugins/`, the helpers under `plugins/codex-computer-use/helper/` and `plugins/chatgpt/helper/`, and the scripts under `scripts/` (including `bootstrap.sh`). Examples: a hook that sends a token or API key to a host other than its own, a tool input that escapes its path or API checks, a prompt injection that makes a plugin act without the user's request, or a helper route reachable by another local user.
 
 Out of scope: Claude Code itself (report to Anthropic), ChatGPT, GitLab, Tailscale and the other services the plugins call, and setups that put a secret in a repository's settings, which the plugins refuse.
 
