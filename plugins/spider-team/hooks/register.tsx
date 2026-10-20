@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, McpToolInputs, Register, RenderElement, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, missedEndings, answeredModel, resumed, spawned, stepReported, toolName, toolUsed } from './agents'
+import { agentEnded, agentStepped, missedEndings, answeredModel, resumed, roleAgents, spawned, stepReported, toolName, toolUsed } from './agents'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
 import { langOf, t } from './i18n'
@@ -70,7 +70,7 @@ type Ending = { reason: string; now: number; usage?: unknown }
 /** What the module keeps between events: the options, the language, the clock's timer and endings heard before their spawn. */
 type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending>; restoredFor?: string; saving: Promise<void> }
 
-/** Engine forks end without a spawn too, so only the latest few endings wait for one. */
+/** Engine forks and untracked agent types end without a tracked spawn too, so only the latest few endings wait for one. */
 const EARLY_MAX = 20
 
 /** Theme keys only, so the pane follows the person's Claude Code theme. */
@@ -241,10 +241,12 @@ export const register: Register = (on, options) => {
     // Each step on its own, so an unreadable language or state never leaves the session without its clock.
     await observe($, () => readLanguage($, held))
     if (held.invalid.length) debug($, `spider-team: invalid options fall back to defaults: ${held.invalid.join(', ')}`)
-    // It fires again on a reload of the plugin's code, whose state the host keeps: the run goes on, and only the
-    // endings missed while the code reloaded are settled. A new session starts empty; /clear and resume reset in session.end.
+    // It fires again on a reload of the plugin's code, whose state the host keeps: the run goes on, the agent types
+    // older code tracked are dropped, and only the endings missed while the code reloaded are settled. A new session
+    // starts empty; /clear and resume reset in session.end.
     await observe($, () => restoreRun($, held))
     await observe($, async () => {
+      await update($, agentsAtom, roleAgents)
       const now = await $.clock.now()
       for (const missed of missedEndings(await read($, agentsAtom), await $.agent.list())) await endAgent($, held, missed.agentId, { reason: missed.reason, now })
     })
@@ -339,9 +341,10 @@ export const register: Register = (on, options) => {
     return write !== undefined ? { deny: refusal(write) } : next(e)
   })
 
-  // A spider-team worker's brief gets the step request appended; every spawned agent is tracked, and one whose brief
-  // names a task starts that task. A resume keeps its prompt (the host ignores a rewrite) and runs its agent again.
-  // autoOpen any opens the pane when an agent starts with none running, so a pane closed mid-work stays closed.
+  // A spider-team worker's brief gets the step request appended; every spider-team role agent is tracked, and one whose
+  // brief names a task starts that task. Other agent types are left alone: the host reports no ending for some of them,
+  // and their rows stayed running for good. A resume keeps its prompt (the host ignores a rewrite) and runs its agent
+  // again. autoOpen any opens the pane when a role agent starts with none running, so a pane closed mid-work stays closed.
   on('agent.spawn', async ($, e, next) => {
     // The agent starts when its spawn is asked, not when the host answers; a clock failure is the observation's to log.
     const asked = $.clock.now()
@@ -352,10 +355,14 @@ export const register: Register = (on, options) => {
     void observe($, async () => {
       const now = await asked
       let idle = false
+      let tracked = false
       await update($, agentsAtom, list => {
         idle = !list.some(agent => agent.status === 'running')
-        return e.resume && list.some(agent => agent.agentId === agentId) ? resumed(list, agentId, now) : spawned(list, { agentId, type: e.subagentType, model: result.model, prompt: e.prompt, now }, held.config.historyLimit)
+        const after = e.resume && list.some(agent => agent.agentId === agentId) ? resumed(list, agentId, now) : spawned(list, { agentId, type: e.subagentType, model: result.model, prompt: e.prompt, now }, held.config.historyLimit)
+        tracked = after.some(agent => agent.agentId === agentId)
+        return after
       })
+      if (!tracked) { held.early.delete(agentId); return }
       const taskId = taskIdOf(e.prompt)
       if (taskId) {
         await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))

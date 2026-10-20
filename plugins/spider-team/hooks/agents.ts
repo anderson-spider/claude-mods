@@ -1,5 +1,6 @@
-// Every subagent the host reports, keyed by its `agentId`: what it was spawned as, the usage of each of its requests,
-// the steps it reported itself and how it ended. Pure: the clock is injected.
+// Every spider-team role agent the host reports, keyed by its `agentId`: what it was spawned as, the usage of each of
+// its requests, the steps it reported itself and how it ended. Other agent types are not tracked: the host reports no
+// ending for some of them, and a row that never ends would stay running in the pane. Pure: the clock is injected.
 import type { SpiderAgent, SpiderRun } from '../types'
 import { addUsage, costOf, hasTokens, usageOf, ZERO } from './metrics'
 import { TIERS, taskIdOf, tierOf } from './tiers'
@@ -10,15 +11,16 @@ const STEP_MAX = 1000
 export const TOOLS_KEPT = 3
 const OWN_TOOLS = 'mcp__spider-team__'
 
-/** A spawned agent joins the list as running; a second spawn event for the same id changes nothing. */
+/** A spawned role agent joins the list as running; another agent type, or a second spawn event for the same id, changes nothing. */
 export function spawned(list: SpiderAgent[], a: { agentId: string; type?: string; model?: string; prompt: string; now: number }, limit: number): SpiderAgent[] {
   if (list.some(agent => agent.agentId === a.agentId)) return list
   const tier = tierOf(a.type)
+  if (!tier) return list
   const taskId = taskIdOf(a.prompt)
   const agent: SpiderAgent = {
     agentId: a.agentId,
     ...(a.type ? { type: a.type } : {}),
-    ...(tier ? { tier, plannedEffort: TIERS[tier].effort } : {}),
+    tier, plannedEffort: TIERS[tier].effort,
     ...(taskId ? { taskId } : {}),
     ...(a.model ? { model: a.model } : {}),
     status: 'running',
@@ -29,6 +31,9 @@ export function spawned(list: SpiderAgent[], a: { agentId: string; type?: string
   }
   return capped([...list, agent], limit)
 }
+
+/** Only the role agents: older code tracked every agent type, and a reload keeps what it held. */
+export const roleAgents = (list: SpiderAgent[]): SpiderAgent[] => (list.every(agent => agent.tier) ? list : list.filter(agent => agent.tier))
 
 /** A resumed agent (SendMessage, a teammate's wake) runs again under its id, with its usage and steps kept. */
 export function resumed(list: SpiderAgent[], agentId: string, now: number): SpiderAgent[] {
