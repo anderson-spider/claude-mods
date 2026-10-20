@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Browser, PageState, TabHolder } from '../hooks/model'
 import { blocked, chatUrlError, findTab, LOAD_MS, pageStateOf, prepare } from '../hooks/tab'
-import { COMPOSER, LANDED, LOGIN } from '../hooks/scripts'
+import { COMPOSER, LANDED, LOGIN, leaveScript } from '../hooks/scripts'
 import { fakeBrowser, printed, turns } from './fake-page'
 
 // Every browser call a tab test makes, in order, with the waits it asked for.
@@ -69,6 +69,27 @@ test('findTab never navigates a tab it did not open: a holder id that is gone op
   expect(holder).toEqual({ id: 't2' })
   expect(calls).toEqual(['tabs', 'open https://chatgpt.com/'])
   expect(calls.some(call => call.includes('user'))).toBe(false)
+})
+
+test('findTab leaves a listed tab that is on another site where it is and opens a tab of its own', async () => {
+  const { browser, calls, waits } = recording({ tabs: ['seed'] })
+  const away = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', away: true })
+  browser.js = away.browser.js
+  const holder: TabHolder = { id: 'seed' }
+  const id = await findTab(browser, TARGET, holder)
+
+  expect(id).toBe('t2')
+  expect(holder).toEqual({ id: 't2' })
+  expect(calls).toEqual(['tabs', 'open https://chatgpt.com/'])
+  expect(away.calls).toEqual(['navigate seed https://chatgpt.com/'])
+  expect(waits).toEqual([['t2', `!!${COMPOSER} || ${LOGIN}`, LOAD_MS]])
+})
+
+test('the leave script moves only a tab on chatgpt.com or openai.com', () => {
+  const guard = /if \(!(\/.*\/)\.test\(location\.hostname\)\)/.exec(leaveScript(TARGET))?.[1]
+  const sites = new RegExp(String(guard).slice(1, -1))
+  expect(['chatgpt.com', 'auth.openai.com', 'openai.com'].every(host => sites.test(host))).toBe(true)
+  expect(['example.com', 'notchatgpt.com', 'chatgpt.com.evil.example', 'mail.google.com'].some(host => sites.test(host))).toBe(false)
 })
 
 test('prepare answers an invalid chatUrl before the browser is touched', async () => {

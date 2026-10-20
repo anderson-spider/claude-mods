@@ -147,6 +147,31 @@ test('a held request with no other backend to take it says what held it, then wh
   expect(h.writes).toEqual([])
 })
 
+test('an image request held in the first backend is generated in the next one', async () => {
+  const held = fakeBrowser({ tabs: [], pages: [{ composer: false, blocker: 'Verify you are human' }], markdown: '', name: 'headless' })
+  held.browser.notReady = 'Nobody can clear it.'
+  const { browser: ready } = fakeImageBrowser({ shots: [{}, { stop: true }, { stop: true, images: 1 }, { images: 1 }], base64: 'B'.repeat(10) })
+  const h = harness(held.browser)
+  const deps: RequestDeps = { ...h.deps, browser: async skip => (skip ? ready : held.browser) }
+  const outcome = await performRequest(deps, { kind: 'image', input: { prompt: 'a cat' }, filePaths: [], out: '/out/cat.png' }, { pollMs: 0, tab: {} })
+
+  expect(outcome.ok).toBe(true)
+  expect(outcome.paths).toEqual(['/out/cat.png'])
+  expect(outcome.note).toBe(`Note: ChatGPT was not ready in headless (at https://chatgpt.com/), so this request ran in ${ready.name}; /chatgpt-doctor shows what holds it.`)
+  expect(outcome.text.split('\n')[0]).toBe(outcome.note)
+})
+
+test('a failure after the prompt was sent never moves the request on', async () => {
+  const { browser } = fakeBrowser({ tabs: [], pages: [{ turns: turns(0) }, { turns: turns(0), blocker: "You've reached your message limit" }], markdown: '' })
+  browser.notReady = 'Nobody can clear it.'
+  const asked: (string | undefined)[] = []
+  const deps: RequestDeps = { ...harness(browser).deps, browser: async skip => (asked.push(skip), browser) }
+  const outcome = await performRequest(deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: {} })
+
+  expect(asked).toEqual([undefined])
+  expect(outcome.text).toBe('ChatGPT stopped: "You\'ve reached your message limit".')
+})
+
 test('a page held in a backend someone sees, or a logged-out page, ends the request where it is', async () => {
   for (const page of [{ composer: false, blocker: 'Verify you are human' }, { composer: false, login: true }]) {
     const { browser } = fakeBrowser({ tabs: [], pages: [page], markdown: '' })

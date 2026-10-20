@@ -77,6 +77,8 @@ export type PageScript = {
   imageSize?: { width: number; height: number }
   /** The page every state poll starts from; `pages` override it. */
   base?: PageState
+  /** The tab is on another site, so the leave script leaves it where it is. */
+  away?: boolean
 }
 
 /** A fake page over `script`: `answer` is the value a script prints, by its kind. */
@@ -95,7 +97,7 @@ export function fakePage(script: PageScript) {
         return true
       }
       case 'leave':
-        return { leaving: true }
+        return { leaving: !script.away }
       case 'model rows':
         return menu.rows()
       case 'model click':
@@ -182,9 +184,9 @@ export function fakeMenu(
 export type FakeMenu = ReturnType<typeof fakeMenu>
 
 /** A fake browser: each state poll returns the next page in `pages` (the last one repeats). */
-export function fakeBrowser(options: { tabs: string[]; pages: Partial<PageState>[]; markdown: string; sent?: boolean; name?: string; menu?: FakeMenu }) {
+export function fakeBrowser(options: { tabs: string[]; pages: Partial<PageState>[]; markdown: string; sent?: boolean; name?: string; menu?: FakeMenu; away?: boolean }) {
   const calls: string[] = []
-  const page = fakePage({ pages: options.pages, markdown: options.markdown, sent: options.sent, menu: options.menu })
+  const page = fakePage({ pages: options.pages, markdown: options.markdown, sent: options.sent, menu: options.menu, away: options.away })
   const browser: Browser = {
     name: options.name ?? 'fake browser',
     tabs: async () => {

@@ -1116,6 +1116,15 @@ test('a headless page held by something other than a login moves the ask on to t
   expect(again).toContain('js leave 7')
   expect(again).not.toContain('helper /open')
   expect(again).not.toContain('mcp claude-in-chrome/tabs_create_mcp')
+
+  // Signing in drops only the headless Chromium's tab: the Chrome tab stays the plugin's.
+  await commandRun($, 'chatgpt-login')
+  w.setPages(HELD_THEN_ASK)
+  const after = w.log.length
+  expect((await toolCall($, 'ask', { prompt: 'hi' })).result).toContain(HELD_NOTE)
+  expect(steps(w.log, after)).toContain('helper /open')
+  expect(steps(w.log, after)).toContain('js leave 7')
+  expect(steps(w.log, after)).not.toContain('mcp claude-in-chrome/tabs_create_mcp')
 })
 
 test('a held headless page with no other browser to take the ask says what held it, then what each other browser answered', async ($, on) => {

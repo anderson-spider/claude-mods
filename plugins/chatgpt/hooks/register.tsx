@@ -11,7 +11,7 @@ import { type Candidate, chooseBrowser } from './chooser'
 import { type Backend, backendsFor, ownCallAllowed } from './backends'
 import { type McpCall, type McpHost, mcpCallOf } from './mcp-call'
 import type { BrowserDeps } from './page-browser'
-import { type PlaywrightHost, signIn } from './playwright-browser'
+import { PLAYWRIGHT, type PlaywrightHost, signIn } from './playwright-browser'
 import { bytesOf } from './upload'
 import { serve } from './tools'
 
@@ -228,7 +228,9 @@ export const register: Register = (on, options) => {
     queue(async () => {
       $.ui.status('ChatGPT: preparing the headless Chromium (the first run downloads it)')
       try {
-        tab.id = undefined
+        // Only the headless Chromium's tab goes: the helper restarts. Another backend's tab stays the plugin's.
+        if (tabOwner === PLAYWRIGHT) tab.id = undefined
+        else tabsOf.delete(PLAYWRIGHT)
         return { text: await signIn(await playwrightHostOf($)) }
       } finally {
         $.ui.status(undefined)
