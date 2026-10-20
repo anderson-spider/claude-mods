@@ -103,6 +103,64 @@ test('an ask with saveOnly saves the chat\'s last answer, sends nothing and says
   expect(outcome).toMatchObject({ ok: true, chatUrl: 'https://chatgpt.com/c/abc', text: expect.stringContaining('saved to /out/saved.md\nChat: https://chatgpt.com/c/abc') })
 })
 
+// A first backend nobody sees, whose page a check holds, and a second one where the ask goes through.
+function heldThenReady() {
+  const held = fakeBrowser({ tabs: [], pages: [{ composer: false, blocker: 'Verify you are human' }], markdown: '', name: 'headless' })
+  held.browser.notReady = 'Nobody can clear it.'
+  const ready = fakeBrowser({ tabs: [], pages: ASK_SETTLED, markdown: '## Answer', name: 'pane' })
+  return { held, ready }
+}
+
+test('a page nobody can clear moves the request on to the next backend before anything is sent, and the answer says so', async () => {
+  const { held, ready } = heldThenReady()
+  const h = harness(held.browser)
+  const skipped: (string | undefined)[] = []
+  const deps: RequestDeps = { ...h.deps, browser: async skip => (skipped.push(skip), skip ? ready.browser : held.browser) }
+  const progress: string[] = []
+  const outcome = await performRequest(deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/a.md' }, { pollMs: 0, tab: {}, progress: text => progress.push(text) })
+
+  expect(skipped).toEqual([undefined, 'headless'])
+  expect(held.calls).toEqual(['open https://chatgpt.com/'])
+  expect(ready.calls).toContain('send t2')
+  expect(progress).toContain('ChatGPT is not ready in headless; trying the other browsers')
+  const note = 'Note: ChatGPT was not ready in headless (at https://chatgpt.com/), so this request ran in pane; /chatgpt-doctor shows what holds it.'
+  expect(outcome).toEqual({
+    ok: true,
+    text: `${note}\nChatGPT's answer (unverified; check facts before using them) saved to /out/a.md\nChat: https://chatgpt.com/c/abc\n\n## Answer`,
+    chatUrl: 'https://chatgpt.com/c/abc',
+    paths: ['/out/a.md'],
+    markdown: '## Answer',
+    note,
+  })
+})
+
+test('a held request with no other backend to take it says what held it, then what each other backend answered', async () => {
+  const { held } = heldThenReady()
+  const h = harness(held.browser)
+  const deps: RequestDeps = { ...h.deps, browser: async skip => (skip ? 'No browser to drive ChatGPT with. pane said: no pane.' : held.browser) }
+  const outcome = await performRequest(deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: {} })
+
+  const text =
+    'ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Verify you are human". Nobody can clear it.\n' +
+    'The other browsers: No browser to drive ChatGPT with. pane said: no pane.'
+  expect(outcome).toEqual({ ok: false, text, error: text, chatUrl: 'https://chatgpt.com/' })
+  expect(h.writes).toEqual([])
+})
+
+test('a page held in a backend someone sees, or a logged-out page, ends the request where it is', async () => {
+  for (const page of [{ composer: false, blocker: 'Verify you are human' }, { composer: false, login: true }]) {
+    const { browser } = fakeBrowser({ tabs: [], pages: [page], markdown: '' })
+    if (page.login) browser.notReady = 'Nobody can clear it.'
+    const asked: (string | undefined)[] = []
+    const deps: RequestDeps = { ...harness(browser).deps, browser: async skip => (asked.push(skip), browser) }
+    const outcome = await performRequest(deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: {} })
+
+    expect(asked).toEqual([undefined])
+    expect(outcome.ok).toBe(false)
+    expect(outcome.note).toBeUndefined()
+  }
+})
+
 test('an ask whose answer is empty says the page layout changed and saves nothing', async () => {
   const { browser } = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: '' })
   const h = harness(browser)

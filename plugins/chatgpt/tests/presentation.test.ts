@@ -23,6 +23,13 @@ test('an ask notice points to the saved answer without carrying ChatGPT text', (
   expect(askCommandAnswer(outcome).text).toContain(markdown)
 })
 
+test('a request that ran in another backend says so in the job notice and the command answer', () => {
+  const note = 'Note: ChatGPT was not ready in A, so this request ran in B.'
+  const outcome = { ...askOutcome({ ok: true, url, markdown }, '/out/answer.md', undefined), note }
+  expect(jobMessage(job, outcome).split('\n').slice(-2)).toEqual([note, 'Read the saved file for the answer.'])
+  expect(askCommandAnswer(outcome).text).toBe(`${markdown}\n\n— ChatGPT, ${url}\nSaved to /out/answer.md\n${note}`)
+})
+
 test('an image notice keeps file guidance without copying its tool text', () => {
   const outcome = imageSummary(url, ['/out/a.png', '/out/b.png'], [], [markdown])
   const message = jobMessage({ ...job, kind: 'image', prompt: 'x'.repeat(70) }, outcome)

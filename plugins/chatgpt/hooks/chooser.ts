@@ -26,5 +26,6 @@ export async function chooseBrowser(candidates: Candidate[]): Promise<Chosen | s
       said.push(`${candidate.name} said: ${reason.slice(0, REASON_MAX)}.`)
     }
   }
-  return `No browser to drive ChatGPT with. ${said.join(' ')} ${candidates.map(candidate => candidate.hint).join(', or ')}, then try again.`
+  const hints = candidates.map(candidate => candidate.hint).join(', or ')
+  return `No browser to drive ChatGPT with. ${said.join(' ')} ${hints.charAt(0).toUpperCase()}${hints.slice(1)}, then try again.`
 }

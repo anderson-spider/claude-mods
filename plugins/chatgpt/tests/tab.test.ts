@@ -126,7 +126,21 @@ test('prepare on a page held by something other than a login says the backend\'s
   browser.notReady = 'Nobody can clear it.'
   const result = await prepare(browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: ['terminal-browser'] })
 
-  expect(!result.ok && result.error).toBe('ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Verify you are human". Nobody can clear it.')
+  expect(result).toEqual({
+    ok: false,
+    url: 'https://chatgpt.com/',
+    error: 'ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Verify you are human". Nobody can clear it.',
+    held: true,
+  })
+})
+
+test('prepare marks a page held only for a backend nobody sees, and never a logged-out page', async () => {
+  const seen = recording({ tabs: ['seed'], pages: [{ composer: false, blocker: 'Verify you are human' }] })
+  expect(await prepare(seen.browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: [] })).not.toHaveProperty('held')
+
+  const loggedOut = recording({ tabs: ['seed'], pages: [{ composer: false, login: true }] })
+  loggedOut.browser.notReady = 'Nobody can clear it.'
+  expect(await prepare(loggedOut.browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: [] })).not.toHaveProperty('held')
 })
 
 test('prepare on a page outside chatgpt.com is not ready, whatever the composer shows', async () => {

@@ -20,8 +20,10 @@ const queue = taskQueue()
 const tab: TabHolder = {}
 const jobs = createJobs()
 
-// The backend the plugin's tab belongs to: a tab id means nothing in another backend.
+// The backend the plugin's tab belongs to: a tab id means nothing in another backend. Each backend's own tab is kept
+// while another holds the plugin's tab, so a request that moves on and back (see performRequest) reuses it.
 let tabOwner: string | undefined
+const tabsOf = new Map<string, string | undefined>()
 
 // The defaults of the `foregroundMinutes` and `backgroundMinutes` settings, as plugin.json declares them.
 const FOREGROUND_MINUTES = 6
@@ -102,12 +104,14 @@ function candidatesOf($: EngineInterface, backends: Backend[]): Candidate[] {
   })
 }
 
-// Picks the backend, and starts the plugin's tab afresh when it differs from the one that opened that tab.
-async function pickBrowser($: EngineInterface): Promise<{ browser: Browser; name: string } | string> {
-  const chosen = await chooseBrowser(candidatesOf($, await backendsOf($)))
+// Picks the backend, leaving out the one `skip` names, and swaps in that backend's own tab when it differs from the
+// one that holds the plugin's tab.
+async function pickBrowser($: EngineInterface, skip?: string): Promise<{ browser: Browser; name: string } | string> {
+  const chosen = await chooseBrowser(candidatesOf($, (await backendsOf($)).filter(({ name }) => name !== skip)))
   if (typeof chosen === 'string') return chosen
   if (tabOwner !== chosen.name) {
-    tab.id = undefined
+    if (tabOwner !== undefined) tabsOf.set(tabOwner, tab.id)
+    tab.id = tabsOf.get(chosen.name)
     tabOwner = chosen.name
   }
   return chosen
@@ -116,8 +120,8 @@ async function pickBrowser($: EngineInterface): Promise<{ browser: Browser; name
 function requestDeps($: EngineInterface): RequestDeps {
   const run = processOf($)
   return {
-    browser: async () => {
-      const picked = await pickBrowser($)
+    browser: async skip => {
+      const picked = await pickBrowser($, skip)
       return typeof picked === 'string' ? picked : picked.browser
     },
     attachments: { stat: path => $.fs.stat(path) },

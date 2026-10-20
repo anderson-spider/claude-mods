@@ -45,7 +45,7 @@ function orList(names: readonly string[]): string {
   return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names.at(-1)}`
 }
 
-type Ready = { ok: true; tabId: string; page: PageState } | { ok: false; error: string; url?: string }
+type Ready = { ok: true; tabId: string; page: PageState } | { ok: false; error: string; url?: string; held?: boolean }
 
 export function blocked(page: { blocker: string }): string {
   return page.blocker ? ` ChatGPT shows: "${page.blocker}".` : ''
@@ -68,10 +68,12 @@ export async function prepare(
   let page = pageStateOf(browser, await browser.js(tabId, stateScript(0)))
   if (!page.href.startsWith(ORIGIN) || page.login || !page.composer) {
     const named = options.backends.length ? ` (${orList(options.backends)})` : ''
-    const advice =
-      (page.login ? browser.signIn : browser.notReady) ??
-      `Ask the user to log in to chatgpt.com in the browser the plugin uses${named}, or to clear what the page shows, and try again; never type credentials.`
-    return { ok: false, url: page.href, error: `ChatGPT is not ready in the browser (at ${page.href}).${blocked(page)} ${advice}` }
+    const general = `Ask the user to log in to chatgpt.com in the browser the plugin uses${named}, or to clear what the page shows, and try again; never type credentials.`
+    const notReady = (advice: string) => `ChatGPT is not ready in the browser (at ${page.href}).${blocked(page)} ${advice}`
+    if (page.login) return { ok: false, url: page.href, error: notReady(browser.signIn ?? general) }
+    // Nobody sees this backend's page, so nobody can clear what holds it (see Browser.notReady).
+    if (browser.notReady) return { ok: false, url: page.href, error: notReady(browser.notReady), held: true }
+    return { ok: false, url: page.href, error: notReady(general) }
   }
   if (page.stop && !options.busy) return { ok: false, url: page.href, error: 'ChatGPT is still answering in that chat; wait and try again.' }
   return { ok: true, tabId, page }

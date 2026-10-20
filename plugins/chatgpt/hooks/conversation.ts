@@ -27,7 +27,7 @@ export async function openRun(
   input: AskInput,
   options: AskOptions,
   flow: { noun: string; pollMs: number },
-): Promise<OpenRun | { ok: false; error: string; url?: string }> {
+): Promise<OpenRun | { ok: false; error: string; url?: string; held?: boolean }> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
   const pollMs = options.pollMs ?? flow.pollMs
   const progress = options.progress ?? (() => {})

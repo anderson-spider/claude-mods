@@ -1076,14 +1076,60 @@ test('with "Headless Chromium first" off the headless Chromium is never tried, a
   expect(answer.text).not.toContain('headless Chromium')
 })
 
-test('a headless page held by something other than a login asks to turn the headless Chromium off if it persists', async ($, on) => {
-  world(on, { playwright: 'ok', pages: [{ composer: false, href: 'https://chatgpt.com/', blocker: 'Confirme que é humano' }] })
+// A headless page a check holds, then the pages an ask goes through in the next backend.
+const HELD_THEN_ASK: Partial<PageState>[] = [
+  { composer: false, href: 'https://chatgpt.com/', blocker: 'Confirme que é humano' },
+  { turns: turns(0) },
+  { turns: turns(1), length: 5 },
+  { turns: turns(1), length: 5 },
+]
+
+const HELD_NOTE =
+  'Note: ChatGPT was not ready in headless Chromium (at https://chatgpt.com/), so this request ran in Claude in Chrome; /chatgpt-doctor shows what holds it.'
+
+test('a headless page held by something other than a login moves the ask on to the next backend, which keeps its own tab', async ($, on) => {
+  const w = world(on, { playwright: 'ok', pages: HELD_THEN_ASK })
+
+  const answer = await toolCall($, 'ask', { prompt: 'hi' })
+
+  const path = w.written[0]?.path
+  expect(answer).toEqual({ result: `${HELD_NOTE}\nChatGPT's answer (unverified; check facts before using them) saved to ${path}\nChat: https://chatgpt.com/c/abc\n\n## Answer` })
+  expect(steps(w.log).filter(entry => !entry.startsWith('js '))).toEqual([
+    PW_CHECK,
+    'helper /health',
+    'process node helper start',
+    'helper /tabs',
+    'helper /open',
+    'process terminal-browser ls',
+    'mcp claude-in-chrome/tabs_context_mcp',
+    'mcp claude-in-chrome/tabs_context_mcp',
+    'mcp claude-in-chrome/tabs_create_mcp',
+    'mcp claude-in-chrome/navigate',
+  ])
+
+  // The next request tries the headless Chromium again in its own tab, then goes back to the Chrome tab.
+  w.setPages(HELD_THEN_ASK)
+  const from = w.log.length
+  expect((await toolCall($, 'ask', { prompt: 'hi' })).result).toContain(HELD_NOTE)
+  const again = steps(w.log, from)
+  expect(again).toContain('js leave 1')
+  expect(again).toContain('js leave 7')
+  expect(again).not.toContain('helper /open')
+  expect(again).not.toContain('mcp claude-in-chrome/tabs_create_mcp')
+})
+
+test('a held headless page with no other browser to take the ask says what held it, then what each other browser answered', async ($, on) => {
+  world(on, { playwright: 'ok', chrome: 'down', pages: HELD_THEN_ASK })
 
   expect(await toolCall($, 'ask', { prompt: 'hi' })).toEqual({
     result:
       'ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Confirme que é humano". ' +
-      "Nobody can clear what the plugin's headless Chromium shows. If it persists, ask the user to turn off \"Headless Chromium first\" " +
-      '(claude plugin configure chatgpt@spider-claude-mods) to use the browsers they log in to themselves; never type credentials.',
+      "Nobody can clear what the plugin's headless Chromium shows, so the plugin tries the other browsers in its place. " +
+      'If it persists, the user can turn off "Headless Chromium first" (claude plugin configure chatgpt@spider-claude-mods) so requests skip it; ' +
+      'never type credentials.\nThe other browsers: No browser to drive ChatGPT with. terminal-browser said: no pane. ' +
+      "Claude in Chrome said: claude-in-chrome is not connected. the Claude app's built-in browser said: Claude_Browser is not connected. " +
+      'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh), or connect Claude in Chrome, ' +
+      "or log in to chatgpt.com in the Claude app's built-in browser, then try again.",
     isError: true,
   })
 })

@@ -65,7 +65,18 @@ export async function performRequest(deps: RequestDeps, request: Request, option
   // The row runs the flow and saves its result; the row's save takes the result its run gives (see FLOWS).
   const flow = FLOWS[request.kind]
   const result = await flow.run(browser, input, options)
-  return await flow.save(deps.output, result as never, request)
+  // A page nobody can clear in this backend held the run before anything was sent: the request moves on, once.
+  if (result.ok || !result.held) return await flow.save(deps.output, result as never, request)
+  options.progress?.(`ChatGPT is not ready in ${browser.name}; trying the other browsers`)
+  const next = await deps.browser(browser.name)
+  if (typeof next === 'string') {
+    const text = `${result.error}\nThe other browsers: ${next}`
+    return { ok: false, text, error: text, chatUrl: result.url }
+  }
+  const outcome = await flow.save(deps.output, (await flow.run(next, input, options)) as never, request)
+  const at = result.url ? ` (at ${result.url})` : ''
+  const note = `Note: ChatGPT was not ready in ${browser.name}${at}, so this request ran in ${next.name}; /chatgpt-doctor shows what holds it.`
+  return { ...outcome, text: `${note}\n${outcome.text}`, note }
 }
 
 // A foreground request; past its wait, a chat that is still going is saved in the background.

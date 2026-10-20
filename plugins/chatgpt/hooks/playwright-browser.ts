@@ -14,8 +14,9 @@ export const PLAYWRIGHT_SIGN_IN =
 
 /** What the person does when something else keeps the headless page from being ready: nobody can clear it there. */
 export const PLAYWRIGHT_BLOCKED =
-  "Nobody can clear what the plugin's headless Chromium shows. If it persists, ask the user to turn off \"Headless Chromium first\" " +
-  '(claude plugin configure chatgpt@spider-claude-mods) to use the browsers they log in to themselves; never type credentials.'
+  "Nobody can clear what the plugin's headless Chromium shows, so the plugin tries the other browsers in its place. " +
+  'If it persists, the user can turn off "Headless Chromium first" (claude plugin configure chatgpt@spider-claude-mods) so requests ' +
+  'skip it; never type credentials.'
 
 export const NOT_SET_UP = 'it is not set up: /chatgpt-login installs it and opens the sign-in window'
 
