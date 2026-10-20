@@ -67,11 +67,13 @@ const TASK_SCHEMA = {
 
 type Ending = { reason: string; now: number; usage?: unknown }
 
-/** What the module keeps between events: the options, the language, the clock's timer and endings heard before their spawn. */
-type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending>; restoredFor?: string; saving: Promise<void> }
+/** What the module keeps between events: the options, the language, the clock's timer, endings heard before their spawn and the agents it does not track. */
+type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending>; untracked: Set<string>; restoredFor?: string; saving: Promise<void> }
 
-/** Engine forks and untracked agent types end without a tracked spawn too, so only the latest few endings wait for one. */
+/** Engine forks end without a spawn too, so only the latest few endings wait for one. */
 const EARLY_MAX = 20
+/** How many untracked agents' ids it keeps, so their endings do not wait for a spawn. */
+const UNTRACKED_MAX = 200
 
 /** Theme keys only, so the pane follows the person's Claude Code theme. */
 const PAINT: Record<Style, { color?: string; backgroundColor?: string; weight?: 'bold'; dimColor?: boolean }> = {
@@ -205,7 +207,7 @@ async function endAgent($: Dollar, held: Held, agentId: string, ending: Ending):
 }
 
 export const register: Register = (on, options) => {
-  const held: Held = { ...configOf((options ?? {}) as Record<string, unknown>), lang: 'en', early: new Map(), saving: Promise.resolve() }
+  const held: Held = { ...configOf((options ?? {}) as Record<string, unknown>), lang: 'en', early: new Map(), untracked: new Set(), saving: Promise.resolve() }
 
   on('session.start', async ($, e, next) => {
     await $.tool.register({
@@ -362,7 +364,12 @@ export const register: Register = (on, options) => {
         tracked = after.some(agent => agent.agentId === agentId)
         return after
       })
-      if (!tracked) { held.early.delete(agentId); return }
+      if (!tracked) {
+        held.early.delete(agentId)
+        held.untracked.add(agentId)
+        for (const id of held.untracked) if (held.untracked.size > UNTRACKED_MAX) held.untracked.delete(id)
+        return
+      }
       const taskId = taskIdOf(e.prompt)
       if (taskId) {
         await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))
@@ -413,6 +420,7 @@ export const register: Register = (on, options) => {
       const agentId = e.agentId
       const ending: Ending = { reason: e.reason, now: await $.clock.now(), usage: (e as { usage?: unknown }).usage }
       if ((await read($, agentsAtom)).some(agent => agent.agentId === agentId && agent.status === 'running')) return endAgent($, held, agentId, ending)
+      if (held.untracked.has(agentId)) return
       // The spawn is recorded after the host answers it, so a quick failure can end the agent first, and a resumed agent
       // can end while its row still reads as ended: the spawn's observation applies the ending once the row runs.
       held.early.set(agentId, ending)

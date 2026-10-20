@@ -42,7 +42,7 @@ const CARD_TONE: Record<CardKey, Tone> = { session: 'claude', plan: 'suggestion'
 const ROLE_TONE: Record<SpiderTier | 'main', Tone> = { main: 'claude', planner: 'merged', worker: 'suggestion', researcher: 'warning', reviewer: 'planMode' }
 const ROLES: (SpiderTier | 'main')[] = ['main', 'planner', 'worker', 'researcher', 'reviewer']
 
-const nameOf = (a: SpiderAgent) => a.tier ?? (a.type?.replace(/^.*:/, '') || 'agent')
+const nameOf = (a: SpiderAgent) => a.tier ?? 'agent'
 const toneOf = (role: string): Tone => ROLE_TONE[role as SpiderTier] ?? 'inactive'
 const sent = (u: SpiderAgent['usage']) => u.input + u.cacheRead + u.cacheWrite
 const width = (line: Piece[]) => line.reduce((n, piece) => n + cells(piece.text), 0)

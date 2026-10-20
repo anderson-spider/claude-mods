@@ -346,12 +346,35 @@ test('a settings read that fails at start still starts the clock, and a reload k
   await flush()
   expect(stored.now).toBe(NOW + 1_000)
   expect(stored.agents?.[0]?.status).toBe('running')
-  // The reload missed the Explore agent's ending: the host no longer lists it.
+  // The reload missed the researcher's ending: the host no longer lists it.
   listed.length = 0
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
   await flush()
   expect(stored.run?.title).toBe('Auth')
   expect(stored.agents?.[0]?.status).toBe('cancelled')
+})
+
+test('a reload drops the generic agents an older version tracked, without ending the role agents', async ($, on) => {
+  const { tools, stored } = world(on)
+  // Older code also wrote generic agents, which the host never reported ending.
+  // Older code also wrote generic agents, which the host never reported ending: the first read after start holds one.
+  let seed = false
+  on('state.get', async (_$, e, next) => {
+    const result = (await next(e)) as { value?: { value?: { shape: string; value: unknown }; version: number } }
+    const saved = result.value?.value
+    if (!seed || e.plugin !== 'spider-team' || e.key !== 'agents' || !saved || !Array.isArray(saved.value)) return result as never
+    seed = false
+    const generic = { agentId: 'old-explore', type: 'Explore', status: 'running', startedAt: NOW, lastUpdate: NOW, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, requests: 0 }
+    return { value: { ...result.value, value: { ...saved, value: [generic, ...saved.value] } } } as never
+  })
+  await started($, tools)
+  seed = true
+  const { agentId } = await spawn($, 'Find the router.', 'spider-team:spider-researcher')
+  await flush()
+  expect(stored.agents?.map(a => a.agentId)).toEqual(['old-explore', agentId])
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  await flush()
+  expect(stored.agents?.map(a => [a.agentId, a.status])).toEqual([[agentId, 'running']])
 })
 
 test('the clock ticks once a second only while an agent runs', async ($, on) => {
