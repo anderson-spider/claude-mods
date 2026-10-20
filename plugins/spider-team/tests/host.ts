@@ -51,8 +51,8 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   })
   on('ui.log', (_$, e) => (logs.push(e.text), { value: undefined }))
   on('settings.read', () => {
-    // A throwing hook would be skipped for the kit's default; settings that are not an object make the read fail in the plugin.
-    if (opts.broken?.settings) return { value: null } as never
+    // A throwing hook would be skipped for the kit's default, and so is a value that is not a settings object (2.1.304): a deny makes the read fail in the plugin.
+    if (opts.broken?.settings) return { deny: 'settings unreadable' } as never
     return { value: opts.language ? { language: opts.language } : {} } as never
   })
   on('env.get', (_$, e) => ({ value: opts.env?.[e.name] }))
