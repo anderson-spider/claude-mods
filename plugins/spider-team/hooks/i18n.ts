@@ -14,7 +14,7 @@ export type Strings = {
     title: string; heading: string; noRun: string; noAgents: string; plan: string; timeline: string
     agentsRunning: string; agentsFinished: string; agentsPlanned: string
     working: string; idle: string; subagents: string; sub: string; session: string; cost: string; time: string
-    steps: string; calls: string; callsOne: string; waits: string; more: string; justNow: string; minutesAgo: string; hoursAgo: string; now: string
+    accepted: string; acceptedOne: string; steps: string; calls: string; callsOne: string; waits: string; more: string; justNow: string; minutesAgo: string; hoursAgo: string; now: string
   }
   command: { opened: string; waits: string; closed: string; cleared: string; usage: string }
   na: string
@@ -37,7 +37,7 @@ export const STRINGS: Record<Lang, Strings> = {
       title: 'Spider agents', heading: 'Panel', noRun: 'no spider-team run', noAgents: 'No agents yet', plan: 'Plan', timeline: 'Last 15 minutes',
       agentsRunning: 'Agents · running', agentsFinished: 'Agents · finished', agentsPlanned: 'Agents · planned',
       working: 'working', idle: 'idle', subagents: 'subagents', sub: 'sub', session: 'Session', cost: 'cost', time: 'time',
-      steps: 'steps', calls: 'calls', callsOne: 'call', waits: 'waits', more: '+{n} more', justNow: 'just now', minutesAgo: '{n} min ago', hoursAgo: '{n} h ago', now: 'now',
+      accepted: 'accepted', acceptedOne: 'accepted', steps: 'steps', calls: 'calls', callsOne: 'call', waits: 'waits', more: '+{n} more', justNow: 'just now', minutesAgo: '{n} min ago', hoursAgo: '{n} h ago', now: 'now',
     },
     command: { opened: 'Agents pane open.', waits: 'The agents pane waits for room:', closed: 'Agents pane closed.', cleared: 'Agents pane cleared: the run, the agents and their usage are forgotten.', usage: 'Usage: /spider-agents [open|close|clear]' },
     na: 'N/A',
@@ -52,7 +52,7 @@ export const STRINGS: Record<Lang, Strings> = {
       title: 'Agentes spider', heading: 'Painel', noRun: 'nenhuma execução do spider-team', noAgents: 'Nenhum agente ainda', plan: 'Plano', timeline: 'Últimos 15 minutos',
       agentsRunning: 'Agentes · rodando', agentsFinished: 'Agentes · terminados', agentsPlanned: 'Agentes · planejados',
       working: 'trabalhando', idle: 'ocioso', subagents: 'subagentes', sub: 'sub', session: 'Sessão', cost: 'custo', time: 'tempo',
-      steps: 'passos', calls: 'chamadas', callsOne: 'chamada', waits: 'aguarda', more: '+{n} mais', justNow: 'agora', minutesAgo: 'há {n} min', hoursAgo: 'há {n} h', now: 'agora',
+      accepted: 'aceitas', acceptedOne: 'aceita', steps: 'passos', calls: 'chamadas', callsOne: 'chamada', waits: 'aguarda', more: '+{n} mais', justNow: 'agora', minutesAgo: 'há {n} min', hoursAgo: 'há {n} h', now: 'agora',
     },
     command: { opened: 'Painel de agentes aberto.', waits: 'O painel de agentes espera espaço:', closed: 'Painel de agentes fechado.', cleared: 'Painel de agentes limpo: a execução, os agentes e o uso foram esquecidos.', usage: 'Uso: /spider-agents [open|close|clear]' },
     na: 'N/A',

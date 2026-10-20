@@ -24,6 +24,37 @@ export function cut(text: string, width: number): string {
   return width <= 0 ? '' : `${chars.slice(0, width - 1).join('')}…`
 }
 
+/**
+ * `text` broken at spaces into lines of at most `width` cells, a word longer than a line split across lines; past `max`
+ * lines the last one ends in `…`.
+ */
+export function wrap(text: string, width: number, max: number): string[] {
+  if (width <= 0 || max <= 0) return []
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    let rest = word
+    while (rest) {
+      if (cells(rest) <= (line ? width - cells(line) - 1 : width)) {
+        line = line ? `${line} ${rest}` : rest
+        rest = ''
+      } else if (line) {
+        lines.push(line)
+        line = ''
+      } else {
+        const chars = [...rest]
+        lines.push(chars.slice(0, width).join(''))
+        rest = chars.slice(width).join('')
+      }
+    }
+  }
+  if (line) lines.push(line)
+  if (lines.length <= max) return lines
+  // The next line did not fit beside the last kept one, so joining them always crosses `width` and ends in `…`.
+  const last = [...`${lines[max - 1]} ${lines[max]}`].slice(0, width - 1).join('').trimEnd()
+  return [...lines.slice(0, max - 1), `${last}…`]
+}
+
 /** `text` cut or padded with spaces to exactly `width` cells. */
 export const pad = (text: string, width: number): string => {
   const fitted = cut(text, width)
