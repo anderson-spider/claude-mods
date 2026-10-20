@@ -9,7 +9,7 @@
 //
 // Every command but `serve` prints one JSON line on stdout; progress and installer output go to stderr.
 import { spawn } from 'node:child_process'
-import { closeSync, mkdirSync, openSync, realpathSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, realpathSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
@@ -17,7 +17,7 @@ import { start, stop } from './lib/daemon.mjs'
 import { createDriver } from './lib/driver.mjs'
 import { installSteps, loadPlaywright, missing } from './lib/install.mjs'
 import { login, windowCommand } from './lib/login.mjs'
-import { pathsOf } from './lib/paths.mjs'
+import { pathsOf, profileHolder } from './lib/paths.mjs'
 import { serve } from './lib/server.mjs'
 import { VERSION } from './lib/version.mjs'
 
@@ -29,6 +29,30 @@ export const IDLE_MS = 10 * 60_000
 const log = message => process.stderr.write(`${new Date().toISOString()} ${message}\n`)
 
 const pause = () => new Promise(resolve => setTimeout(resolve, 250))
+
+/** How long ago `login` touched its mark, in ms; Infinity when it never did. */
+const loginAgeOf = paths => () => {
+  try {
+    return Date.now() - statSync(paths.loginMark).mtimeMs
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+}
+
+const markOf = paths => () => {
+  mkdirSync(paths.run, { recursive: true, mode: 0o700 })
+  writeFileSync(paths.loginMark, '')
+  const now = new Date()
+  utimesSync(paths.loginMark, now, now)
+}
+
+/** Starts a detached command and resolves once it is running; rejects when it cannot start. */
+const launch = argv =>
+  new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore' })
+    child.once('error', reject)
+    child.once('spawn', () => (child.unref(), resolve()))
+  })
 
 /** Runs one install step with its output on stderr; rejects when it fails. */
 const runStep = argv =>
@@ -55,6 +79,8 @@ const COMMANDS = {
       version: VERSION,
       pause,
       missing,
+      profileHolder,
+      loginAge: loginAgeOf(paths),
       spawnServe: () => {
         mkdirSync(paths.home, { recursive: true })
         const out = openSync(paths.log, 'a')
@@ -68,16 +94,14 @@ const COMMANDS = {
   login: paths =>
     login({
       paths,
+      mark: markOf(paths),
       stopDaemon: () => stop({ paths, pause }),
       missing,
       install: async lacking => {
         mkdirSync(paths.runtime, { recursive: true })
         for (const argv of installSteps(paths, lacking, process.execPath)) await runStep(argv)
       },
-      openWindow: async () => {
-        const [command, ...args] = windowCommand(loadPlaywright(paths).chromium.executablePath(), paths.profile, process.platform)
-        spawn(command, args, { detached: true, stdio: 'ignore' }).unref()
-      },
+      openWindow: () => launch(windowCommand(loadPlaywright(paths).chromium.executablePath(), paths.profile, process.platform)),
     }),
 
   serve: async paths => {

@@ -5,11 +5,13 @@ import {
   NOT_SET_UP,
   NO_NODE,
   PLAYWRIGHT,
+  PLAYWRIGHT_BLOCKED,
   PLAYWRIGHT_SIGN_IN,
   type PlaywrightHost,
   helperHome,
   helperReply,
   installedMarker,
+  older,
   openPlaywright,
   signIn,
 } from '../hooks/playwright-browser'
@@ -98,14 +100,23 @@ test('a helper that is not running is started through node with its home, then t
   expect(bodies.every(call => call.socketPath === SOCKET)).toBe(true)
 })
 
-test('a running helper of this version is used as is; one of another version is replaced through start', async () => {
-  const same = fakeHost({ running: '1.0.0', routes: TABS })
-  await openPlaywright(same.host)
-  expect(same.calls).toEqual([`exists ${installedMarker(HOME)}`, 'post /health', 'post /tabs'])
+test('a running helper of this version or newer is used as is; an older one is replaced through start', async () => {
+  for (const running of ['1.0.0', '1.2.0']) {
+    const kept = fakeHost({ running, routes: TABS })
+    await openPlaywright(kept.host)
+    expect(kept.calls).toEqual([`exists ${installedMarker(HOME)}`, 'post /health', 'post /tabs'])
+  }
 
   const old = fakeHost({ running: '0.9.0', routes: TABS })
   await openPlaywright(old.host)
   expect(old.calls).toEqual([`exists ${installedMarker(HOME)}`, 'post /health', 'node start', 'post /tabs'])
+})
+
+test('older compares dotted versions as the helper does', () => {
+  expect(older('0.10.4', '0.11.0')).toBe(true)
+  expect(older('0.9.10', '0.10.0')).toBe(true)
+  expect(older('1.2.0', '1.0.0')).toBe(false)
+  expect(older('1.0.0', '1.0.0')).toBe(false)
 })
 
 test('a start that fails, no node, a missing browser or a launch that fails is the reason the chooser reports', async () => {
@@ -114,6 +125,12 @@ test('a start that fails, no node, a missing browser or a launch that fails is t
     'the helper did not start; see /log',
   )
   expect(await openPlaywright(fakeHost({ node: 'missing' }).host)).toBe(NO_NODE)
+  // A run that fails for another reason than a missing node is said as it is, never as a missing node.
+  const slow = fakeHost()
+  slow.host.run = async () => Promise.reject(new Error('the command was still running after 60000 ms'))
+  expect(await openPlaywright(slow.host)).toBe(
+    "the helper's start did not finish within 1 minutes or failed: the command was still running after 60000 ms",
+  )
   const locked = fakeHost({ routes: { '/tabs': { status: 'error', message: 'the ChatGPT login window is still open: close it, then try again' } } })
   expect(await openPlaywright(locked.host)).toBe('the ChatGPT login window is still open: close it, then try again')
 })
@@ -128,6 +145,7 @@ test('the Browser speaks the helper routes: the first listing is reused, scripts
 
   expect(browser.name).toBe(PLAYWRIGHT)
   expect(browser.signIn).toBe(PLAYWRIGHT_SIGN_IN)
+  expect(browser.notReady).toBe(PLAYWRIGHT_BLOCKED)
   expect(await browser.tabs()).toEqual(['1'])
   expect(await browser.openTab('https://chatgpt.com/')).toBe('2')
   expect(await browser.js('2', 'return JSON.stringify({a: 1})')).toBe('"{\\"a\\":1}"')
@@ -159,7 +177,7 @@ test('a route that fails throws with the backend name, except a wait, which coun
 test('/chatgpt-login runs the helper login with a ten-minute limit and answers what happened', async () => {
   const opened = fakeHost()
   expect(await signIn(opened.host)).toBe(
-    "A Chromium window opened on chatgpt.com. Sign in there, then close the window: ChatGPT requests run in the plugin's headless Chromium after that.",
+    "A Chromium window opened on chatgpt.com. Sign in there, then quit that browser (⌘Q on macOS; closing the window leaves it running): ChatGPT requests run in the plugin's headless Chromium after that.",
   )
   expect(opened.runs).toEqual([{ argv: ['node', '/plugin/helper/helper.mjs', 'login', '--home', '/home/u/.claude/chatgpt/playwright'], timeoutMs: 600_000 }])
 

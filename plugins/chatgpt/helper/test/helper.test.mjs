@@ -20,6 +20,8 @@ test('each command takes --home, and the paths live under it', () => {
     profile: '/h/profile',
     run: '/h/run',
     socket: '/h/run/helper.sock',
+    lock: '/h/run/serve.lock',
+    loginMark: '/h/run/login',
     log: '/h/helper.log',
   })
   for (const argv of [[], ['start'], ['start', '--home'], ['open', '--home', '/h'], ['stop', '/h']]) {

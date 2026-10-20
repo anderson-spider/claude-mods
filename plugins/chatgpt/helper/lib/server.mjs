@@ -1,10 +1,17 @@
-import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, unlinkSync, writeSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { connect } from 'node:net'
 
-import { socketError } from './paths.mjs'
+import { isAlive, socketError } from './paths.mjs'
 
 const MAX_BODY = 5_000_000
+
+// How long a stopping daemon lets the requests in flight finish before it closes the browser under them.
+export const DRAIN_MS = 30_000
+
+// How long a new daemon waits for the one before it to let go of the lock: only a stopping daemon's last moment
+// (`start` spawns after the old socket went quiet). A second daemon spawned by a concurrent `start` gives up instead.
+const LOCK_WAIT_MS = 1_000
 
 /**
  * The routes, each answering a POST's JSON body with a reply that carries `status`; the hooks' adapter
@@ -56,19 +63,43 @@ const readBody = request =>
     request.on('error', reject)
   })
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
 /**
- * Serves the driver on `paths.socket` until `/stop`, or until `idleMs` pass with no request in flight; then closes
- * the browser, removes the socket and calls `exit`. Refuses to start while another daemon answers on the socket.
+ * Takes the lock only one `serve` per home holds: created exclusively, holding this pid. A lock whose process is gone
+ * is taken over; one whose process runs is waited for a moment (a daemon that is stopping), then refused.
  */
-export async function serve({ driver, paths, version, idleMs, exit, log }) {
+export async function takeLock(path, pid = process.pid, waitMs = LOCK_WAIT_MS) {
+  const deadline = Date.now() + waitMs
+  for (;;) {
+    try {
+      const fd = openSync(path, 'wx', 0o600)
+      writeSync(fd, String(pid))
+      closeSync(fd)
+      return
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+    }
+    const holder = Number(readFileSync(path, 'utf8'))
+    if (!holder || !isAlive(holder)) unlinkSync(path)
+    else if (Date.now() >= deadline) throw new Error(`a helper (pid ${holder}) already serves this home`)
+    else await sleep(100)
+  }
+}
+
+/**
+ * Serves the driver on `paths.socket` until `/stop`, or until `idleMs` pass with no request in flight. Stopping lets
+ * the requests in flight finish (up to `drainMs`), then closes the browser, then the socket, then the lock, and calls
+ * `exit`: while it stops, `/health` says `stopping`, so no `start` takes the profile before the browser let go of it.
+ */
+export async function serve({ driver, paths, version, idleMs, exit, log, drainMs = DRAIN_MS, lockWaitMs = LOCK_WAIT_MS }) {
   const tooLong = socketError(paths)
   if (tooLong) throw new Error(tooLong)
   mkdirSync(paths.run, { recursive: true, mode: 0o700 })
   chmodSync(paths.run, 0o700)
-  if (existsSync(paths.socket)) {
-    if (await isLive(paths.socket)) throw new Error(`a helper already answers on ${paths.socket}`)
-    unlinkSync(paths.socket)
-  }
+  await takeLock(paths.lock, process.pid, lockWaitMs)
+  // Only the lock holder touches the socket, so a socket file here is a dead daemon's.
+  if (existsSync(paths.socket)) unlinkSync(paths.socket)
 
   let inflight = 0
   let timer
@@ -84,35 +115,49 @@ export async function serve({ driver, paths, version, idleMs, exit, log }) {
     (ending ??= (async () => {
       log(`stopping (${reason})`)
       clearTimeout(timer)
-      server.close()
+      const until = Date.now() + drainMs
+      while (inflight > 0 && Date.now() < until) await sleep(50)
       await driver.close().catch(error => log(`closing the browser failed: ${error?.message}`))
-      if (existsSync(paths.socket)) unlinkSync(paths.socket)
+      await new Promise(resolve => server.close(() => resolve()))
+      // Forced: a folder removed under the daemon must not keep it from exiting.
+      rmSync(paths.socket, { force: true })
+      rmSync(paths.lock, { force: true })
       exit(0)
     })())
 
   const server = createServer(async (request, response) => {
-    inflight++
-    clearTimeout(timer)
+    const route = request.url
     let reply
-    try {
-      const text = await readBody(request)
-      const body = text ? JSON.parse(text) : {}
-      reply = request.url === '/stop' ? { status: 'ok' } : await answer(driver, request.url, body, version)
-    } catch (error) {
-      reply = { status: 'error', message: error instanceof Error ? error.message : String(error) }
-    } finally {
-      inflight--
+    if (ending) {
+      reply = route === '/health' ? { status: 'stopping', version } : { status: 'error', message: 'the helper is stopping; try again' }
+    } else {
+      inflight++
+      clearTimeout(timer)
+      try {
+        const text = await readBody(request)
+        const body = text ? JSON.parse(text) : {}
+        reply = route === '/stop' ? { status: 'ok' } : await answer(driver, route, body, version)
+      } catch (error) {
+        reply = { status: 'error', message: error instanceof Error ? error.message : String(error) }
+      } finally {
+        inflight--
+      }
     }
-    response.writeHead(200, { 'content-type': 'application/json' })
+    response.writeHead(200, { 'content-type': 'application/json', connection: 'close' })
     response.end(JSON.stringify(reply))
-    if (request.url === '/stop') void shutdown('stop')
+    if (route === '/stop') void shutdown('stop')
     else if (!ending) arm()
   })
 
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(paths.socket, resolve)
-  })
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(paths.socket, resolve)
+    })
+  } catch (error) {
+    rmSync(paths.lock, { force: true })
+    throw error
+  }
   chmodSync(paths.socket, 0o600)
   arm()
   log(`serving ${version} on ${paths.socket}`)

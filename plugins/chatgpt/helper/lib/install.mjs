@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 
 import { PLAYWRIGHT_VERSION } from './version.mjs'
 
@@ -11,14 +11,23 @@ export const loadPlaywright = paths => createRequire(join(paths.runtime, 'packag
 
 const DISK = { exists: existsSync, read: path => readFileSync(path, 'utf8'), load: loadPlaywright }
 
+/** The marker Playwright's installer writes in a browser's folder once the download is whole. */
+export const completeMarker = (paths, executable) => join(paths.browsers, relative(paths.browsers, executable).split(sep)[0], 'INSTALLATION_COMPLETE')
+
 /**
- * What is missing: `runtime` (no playwright-core, or another version than the pinned one), `browser` (no Chromium
- * build for it), or undefined when the helper can run.
+ * What is missing: `runtime` (no playwright-core of the pinned version, or one that does not load), `browser` (no
+ * whole Chromium build for it), or undefined when the helper can run.
  */
 export function missing(paths, disk = DISK) {
   const core = corePackage(paths)
-  if (!disk.exists(core) || JSON.parse(disk.read(core)).version !== PLAYWRIGHT_VERSION) return 'runtime'
-  return disk.exists(disk.load(paths).chromium.executablePath()) ? undefined : 'browser'
+  let executable
+  try {
+    if (!disk.exists(core) || JSON.parse(disk.read(core)).version !== PLAYWRIGHT_VERSION) return 'runtime'
+    executable = disk.load(paths).chromium.executablePath()
+  } catch {
+    return 'runtime'
+  }
+  return disk.exists(executable) && disk.exists(completeMarker(paths, executable)) ? undefined : 'browser'
 }
 
 /**

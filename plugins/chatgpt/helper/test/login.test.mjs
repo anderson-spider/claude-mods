@@ -32,6 +32,7 @@ function steps({ stopped = true, lacking = [] } = {}) {
     log,
     deps: {
       paths: pathsOf('/h'),
+      mark: () => log.push('mark'),
       stopDaemon: async () => (log.push('stop'), stopped),
       missing: () => lacking.shift(),
       install: async what => log.push(`install ${what}`),
@@ -40,22 +41,27 @@ function steps({ stopped = true, lacking = [] } = {}) {
   }
 }
 
-test('login stops the daemon, installs what is missing, then opens the window', async () => {
+test('login marks itself, stops the daemon, installs what is missing, marks again and opens the window', async () => {
   const { log, deps } = steps({ lacking: ['runtime', undefined] })
   assert.deepEqual(await login(deps), { status: 'opened' })
-  assert.deepEqual(log, ['stop', 'install runtime', 'open'])
+  assert.deepEqual(log, ['mark', 'stop', 'install runtime', 'mark', 'open'])
 
   const ready = steps()
   assert.deepEqual(await login(ready.deps), { status: 'opened' })
-  assert.deepEqual(ready.log, ['stop', 'open'])
+  assert.deepEqual(ready.log, ['mark', 'stop', 'mark', 'open'])
+})
+
+test('a window that cannot start fails the login', async () => {
+  const { deps } = steps()
+  await assert.rejects(login({ ...deps, openWindow: async () => Promise.reject(new Error('spawn open ENOENT')) }), /ENOENT/)
 })
 
 test('a daemon that will not stop, or an install that leaves something missing, opens no window', async () => {
   const stuck = steps({ stopped: false })
   assert.deepEqual(await login(stuck.deps), { status: 'error', message: 'the running helper did not stop' })
-  assert.deepEqual(stuck.log, ['stop'])
+  assert.deepEqual(stuck.log, ['mark', 'stop'])
 
   const broken = steps({ lacking: ['runtime', 'browser'] })
   assert.deepEqual(await login(broken.deps), { status: 'error', message: 'the install finished but the browser is still missing' })
-  assert.deepEqual(broken.log, ['stop', 'install runtime'])
+  assert.deepEqual(broken.log, ['mark', 'stop', 'install runtime'])
 })

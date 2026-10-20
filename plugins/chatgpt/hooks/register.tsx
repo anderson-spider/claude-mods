@@ -32,6 +32,9 @@ const BACKGROUND_MINUTES = 30
 let foregroundMs = limitMs(undefined, FOREGROUND_MINUTES)
 let backgroundMs = limitMs(undefined, BACKGROUND_MINUTES)
 
+// The `headlessChromium` setting: off leaves the plugin's own browser out, so only the ones the user logs in to are tried.
+let headlessFirst = true
+
 function processOf($: EngineInterface): ProcessRunner {
   return (argv, init) => $.process.run(argv, init)
 }
@@ -74,9 +77,10 @@ async function playwrightHostOf($: EngineInterface): Promise<PlaywrightHost> {
   }
 }
 
-// The backends in this session's order (see backendsFor).
+// The backends in this session's order (see backendsFor), without the headless Chromium when the setting is off.
 async function backendsOf($: EngineInterface): Promise<Backend[]> {
-  return backendsFor(await $.env.get('CLAUDE_CODE_ENTRYPOINT'))
+  const backends = backendsFor(await $.env.get('CLAUDE_CODE_ENTRYPOINT'))
+  return headlessFirst ? backends : backends.filter(backend => !('helper' in backend))
 }
 
 // The backends, each opened only when the chooser gets to it.
@@ -168,6 +172,7 @@ function handlers($: EngineInterface) {
 export const register: Register = (on, options) => {
   foregroundMs = limitMs(options?.foregroundMinutes, FOREGROUND_MINUTES)
   backgroundMs = limitMs(options?.backgroundMinutes, BACKGROUND_MINUTES)
+  headlessFirst = options?.headlessChromium !== false
 
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)

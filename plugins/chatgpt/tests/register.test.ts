@@ -1023,7 +1023,7 @@ test('a logged-out headless page asks for /chatgpt-login instead of naming every
   expect(await toolCall($, 'ask', { prompt: 'hi' })).toEqual({
     result:
       'ChatGPT is not ready in the browser (at https://chatgpt.com/auth/login). ' +
-      'Ask the user to run /chatgpt-login and sign in to chatgpt.com in the window it opens, then close it and try again; never type credentials.',
+      'Ask the user to run /chatgpt-login, sign in to chatgpt.com in the window it opens and quit that browser (⌘Q on macOS), then try again; never type credentials.',
     isError: true,
   })
 })
@@ -1053,7 +1053,7 @@ test('/chatgpt-login runs the helper login, answers what to do next and forgets 
   const answer = await commandRun($, 'chatgpt-login')
 
   expect(answer).toEqual({
-    text: "A Chromium window opened on chatgpt.com. Sign in there, then close the window: ChatGPT requests run in the plugin's headless Chromium after that.",
+    text: "A Chromium window opened on chatgpt.com. Sign in there, then quit that browser (⌘Q on macOS; closing the window leaves it running): ChatGPT requests run in the plugin's headless Chromium after that.",
   })
   expect(w.log.slice(from)).toEqual(['process node helper login'])
   expect(w.processes.at(-1)?.[1]).toMatch(/\/helper\/helper\.mjs$/)
@@ -1064,6 +1064,28 @@ test('/chatgpt-login runs the helper login, answers what to do next and forgets 
   const next = w.log.length
   await commandRun($, 'chatgpt-doctor')
   expect(steps(w.log, next)).toContain('helper /open')
+})
+
+test('with "Headless Chromium first" off the headless Chromium is never tried, and the texts leave it out', { options: { headlessChromium: false } }, async ($, on) => {
+  const w = world(on, { playwright: 'ok', chrome: 'down' })
+
+  const answer = await commandRun($, 'chatgpt-doctor')
+
+  expect(w.log).not.toContain(PW_CHECK)
+  expect(w.processes.some(argv => argv[0] === 'node')).toBe(false)
+  expect(answer.text).not.toContain('headless Chromium')
+})
+
+test('a headless page held by something other than a login asks to turn the headless Chromium off if it persists', async ($, on) => {
+  world(on, { playwright: 'ok', pages: [{ composer: false, href: 'https://chatgpt.com/', blocker: 'Confirme que é humano' }] })
+
+  expect(await toolCall($, 'ask', { prompt: 'hi' })).toEqual({
+    result:
+      'ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Confirme que é humano". ' +
+      "Nobody can clear what the plugin's headless Chromium shows. If it persists, ask the user to turn off \"Headless Chromium first\" " +
+      '(claude plugin configure chatgpt@spider-claude-mods) to use the browsers they log in to themselves; never type credentials.',
+    isError: true,
+  })
 })
 
 test('/chatgpt-login without node says what it needs', async ($, on) => {

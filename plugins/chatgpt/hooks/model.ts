@@ -3,8 +3,10 @@ import type { Kind } from './flows'
 export type Browser = {
   /** The backend's name, as the chooser and the advice name it; an error about the backend starts with it. */
   name: string
-  /** What the person does to sign in, for a backend with a way of its own; the not-ready text then says this instead of the general advice. */
+  /** What the person does to sign in, for a backend with a way of its own; a logged-out page's not-ready text says this instead of the general advice. */
   signIn?: string
+  /** The same for a page that is not ready for another reason (a dialog, a check), for a backend whose page nobody can see. */
+  notReady?: string
   /** The ids of the open tabs. */
   tabs(): Promise<string[]>
   /** Opens a tab at `url` (and the browser, when none is open) and returns its id. */

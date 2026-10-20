@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { post } from '../lib/daemon.mjs'
 import { pathsOf } from '../lib/paths.mjs'
-import { ROUTE_TABLE, answer, serve } from '../lib/server.mjs'
+import { ROUTE_TABLE, answer, serve, takeLock } from '../lib/server.mjs'
 
 // A short home in the system temp folder: a Unix socket path holds about 100 bytes.
 const home = t => {
@@ -28,6 +29,8 @@ function fakeDriver(overrides = {}) {
   }
   return { driver, calls }
 }
+
+const quiet = { exit: () => {}, log: () => {} }
 
 test('the route table holds exactly the routes the hooks call', () => {
   assert.deepEqual(Object.keys(ROUTE_TABLE), ['/health', '/tabs', '/open', '/wait', '/eval', '/upload'])
@@ -54,7 +57,7 @@ test('a page value of undefined crosses as null; a driver that throws and an unk
   assert.deepEqual(await answer(driver, 'constructor', {}), { status: 'error', message: 'no route constructor' })
 })
 
-test('serve answers over a socket only this user can reach, and /stop closes the browser, removes the socket and exits', async t => {
+test('serve answers over a socket only this user can reach, holding the lock, and /stop releases both and exits', async t => {
   const paths = home(t)
   const { driver, calls } = fakeDriver()
   const exits = []
@@ -64,6 +67,7 @@ test('serve answers over a socket only this user can reach, and /stop closes the
 
   assert.equal(statSync(paths.run).mode & 0o777, 0o700)
   assert.equal(statSync(paths.socket).mode & 0o777, 0o600)
+  assert.equal(readFileSync(paths.lock, 'utf8'), String(process.pid))
   assert.deepEqual(await post(paths.socket, '/health'), { status: 'ok', version: '9.9.9' })
   assert.deepEqual(await post(paths.socket, '/open', { url: 'https://chatgpt.com/' }), { status: 'ok', tab: '2' })
   assert.deepEqual(await post(paths.socket, '/stop'), { status: 'ok' })
@@ -71,23 +75,46 @@ test('serve answers over a socket only this user can reach, and /stop closes the
   assert.deepEqual(exits, [0])
   assert.deepEqual(calls.at(-1), ['close'])
   assert.equal(existsSync(paths.socket), false)
+  assert.equal(existsSync(paths.lock), false)
+})
+
+test('a stopping daemon lets the request in flight finish, says stopping meanwhile, then closes the browser before the socket goes', async t => {
+  const paths = home(t)
+  let release
+  const held = new Promise(resolve => (release = resolve))
+  const order = []
+  const { driver } = fakeDriver({
+    wait: async () => (await held, order.push('wait answered'), true),
+    close: async () => order.push(`browser closed, socket ${existsSync(paths.socket) ? 'still there' : 'gone'}`),
+  })
+  let exited
+  const done = new Promise(resolve => (exited = resolve))
+  await serve({ driver, paths, version: '1', idleMs: 60_000, exit: () => exited(), log: () => {} })
+
+  const waiting = post(paths.socket, '/wait', { tab: '1', fn: 'true', timeoutMs: 1000 })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.deepEqual(await post(paths.socket, '/stop'), { status: 'ok' })
+  assert.deepEqual(await post(paths.socket, '/health'), { status: 'stopping', version: '1' })
+  assert.deepEqual(await post(paths.socket, '/tabs'), { status: 'error', message: 'the helper is stopping; try again' })
+  release()
+  assert.deepEqual(await waiting, { status: 'ok', ok: true })
+  await done
+  assert.deepEqual(order, ['wait answered', 'browser closed, socket still there'])
+  assert.equal(existsSync(paths.socket), false)
 })
 
 test('a body that is not JSON answers status error and the daemon keeps serving', async t => {
   const paths = home(t)
-  const { driver } = fakeDriver()
-  const { shutdown } = await serve({ driver, paths, version: '1', idleMs: 60_000, exit: () => {}, log: () => {} })
+  const { shutdown } = await serve({ driver: fakeDriver().driver, paths, version: '1', idleMs: 60_000, ...quiet })
   t.after(() => shutdown('test'))
   const reply = await new Promise((resolve, reject) => {
-    import('node:http').then(({ request }) => {
-      const req = request({ socketPath: paths.socket, path: '/tabs', method: 'POST' }, res => {
-        let text = ''
-        res.on('data', chunk => (text += chunk))
-        res.on('end', () => resolve(JSON.parse(text)))
-      })
-      req.on('error', reject)
-      req.end('{not json')
+    const req = request({ socketPath: paths.socket, path: '/tabs', method: 'POST' }, res => {
+      let text = ''
+      res.on('data', chunk => (text += chunk))
+      res.on('end', () => resolve(JSON.parse(text)))
     })
+    req.on('error', reject)
+    req.end('{not json')
   })
   assert.equal(reply.status, 'error')
   assert.deepEqual(await post(paths.socket, '/tabs'), { status: 'ok', tabs: ['1'] })
@@ -112,20 +139,32 @@ test('with no request for idleMs the daemon stops by itself; a request in flight
   assert.equal(existsSync(paths.socket), false)
 })
 
-test('serve refuses while another daemon answers on the socket, and clears a stale socket file', async t => {
+test('a second serve on the same home waits for the lock, then refuses; nothing of the first is touched', async t => {
   const paths = home(t)
-  const first = await serve({ driver: fakeDriver().driver, paths, version: '1', idleMs: 60_000, exit: () => {}, log: () => {} })
-  await assert.rejects(serve({ driver: fakeDriver().driver, paths, version: '2', idleMs: 60_000, exit: () => {}, log: () => {} }), /already answers/)
+  const first = await serve({ driver: fakeDriver().driver, paths, version: '1', idleMs: 60_000, ...quiet })
+  await assert.rejects(serve({ driver: fakeDriver().driver, paths, version: '2', idleMs: 60_000, lockWaitMs: 100, ...quiet }), /already serves this home/)
+  assert.deepEqual(await post(paths.socket, '/health'), { status: 'ok', version: '1' })
   await first.shutdown('test')
+})
 
+test('a dead daemon leaves a lock and a socket file behind: the next serve takes both over', async t => {
+  const paths = home(t)
   mkdirSync(paths.run, { recursive: true })
+  writeFileSync(paths.lock, '2147483646')
   writeFileSync(paths.socket, '')
-  const second = await serve({ driver: fakeDriver().driver, paths, version: '2', idleMs: 60_000, exit: () => {}, log: () => {} })
+  const next = await serve({ driver: fakeDriver().driver, paths, version: '2', idleMs: 60_000, ...quiet })
   assert.deepEqual(await post(paths.socket, '/health'), { status: 'ok', version: '2' })
-  await second.shutdown('test')
+  await next.shutdown('test')
+})
+
+test('the lock is exclusive: a running holder is waited for, then refused', async t => {
+  const paths = home(t)
+  mkdirSync(paths.run, { recursive: true })
+  await takeLock(paths.lock, process.pid, 0)
+  await assert.rejects(takeLock(paths.lock, 1, 50), /already serves this home/)
 })
 
 test('a home too long for a Unix socket is refused before listening', async () => {
   const paths = pathsOf(`/${'x'.repeat(100)}`)
-  await assert.rejects(serve({ driver: fakeDriver().driver, paths, version: '1', idleMs: 1, exit: () => {}, log: () => {} }), /more than a Unix socket takes/)
+  await assert.rejects(serve({ driver: fakeDriver().driver, paths, version: '1', idleMs: 1, ...quiet }), /more than a Unix socket takes/)
 })

@@ -55,7 +55,7 @@ export function blocked(page: { blocker: string }): string {
 // `busy` accepts a chat still answering (to save what it is writing); `backends` names the browsers the plugin tries
 // (it cannot import them: the list lives in a module that imports this one).
 export async function prepare(
-  browser: Pick<Browser, 'name' | 'signIn' | 'tabs' | 'openTab' | 'js' | 'waitFor'>,
+  browser: Pick<Browser, 'name' | 'signIn' | 'notReady' | 'tabs' | 'openTab' | 'js' | 'waitFor'>,
   input: { chatUrl?: string },
   options: { progress: (text: string) => void; tab: TabHolder; busy?: boolean; backends: readonly string[] },
 ): Promise<Ready> {
@@ -69,7 +69,7 @@ export async function prepare(
   if (!page.href.startsWith(ORIGIN) || page.login || !page.composer) {
     const named = options.backends.length ? ` (${orList(options.backends)})` : ''
     const advice =
-      browser.signIn ??
+      (page.login ? browser.signIn : browser.notReady) ??
       `Ask the user to log in to chatgpt.com in the browser the plugin uses${named}, or to clear what the page shows, and try again; never type credentials.`
     return { ok: false, url: page.href, error: `ChatGPT is not ready in the browser (at ${page.href}).${blocked(page)} ${advice}` }
   }

@@ -120,6 +120,15 @@ test("prepare on a logged-out page of a backend with its own sign-in says that s
   })
 })
 
+test('prepare on a page held by something other than a login says the backend\'s own not-ready advice when it has one', async () => {
+  const { browser } = recording({ tabs: ['seed'], pages: [{ composer: false, blocker: 'Verify you are human' }] })
+  browser.signIn = 'Sign in.'
+  browser.notReady = 'Nobody can clear it.'
+  const result = await prepare(browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: ['terminal-browser'] })
+
+  expect(!result.ok && result.error).toBe('ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "Verify you are human". Nobody can clear it.')
+})
+
 test('prepare on a page outside chatgpt.com is not ready, whatever the composer shows', async () => {
   const { browser } = recording({ tabs: ['seed'], pages: [{ href: 'https://example.com/', composer: true }] })
   const result = await prepare(browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: [] })

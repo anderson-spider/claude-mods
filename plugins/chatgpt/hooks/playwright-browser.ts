@@ -10,7 +10,12 @@ export const PLAYWRIGHT_HINT = "Run /chatgpt-login to install the plugin's headl
 
 /** What the person does when the headless page is logged out; it replaces the not-ready advice for this backend. */
 export const PLAYWRIGHT_SIGN_IN =
-  "Ask the user to run /chatgpt-login and sign in to chatgpt.com in the window it opens, then close it and try again; never type credentials."
+  'Ask the user to run /chatgpt-login, sign in to chatgpt.com in the window it opens and quit that browser (⌘Q on macOS), then try again; never type credentials.'
+
+/** What the person does when something else keeps the headless page from being ready: nobody can clear it there. */
+export const PLAYWRIGHT_BLOCKED =
+  "Nobody can clear what the plugin's headless Chromium shows. If it persists, ask the user to turn off \"Headless Chromium first\" " +
+  '(claude plugin configure chatgpt@spider-claude-mods) to use the browsers they log in to themselves; never type credentials.'
 
 export const NOT_SET_UP = 'it is not set up: /chatgpt-login installs it and opens the sign-in window'
 
@@ -24,6 +29,16 @@ export type PlaywrightHost = {
   home: string | undefined
   root: string
   version: string
+}
+
+/** Whether version `a` is older than `b` (dotted numbers), as helper/lib/daemon.mjs decides it. */
+export function older(a: string, b: string): boolean {
+  const parts = (version: string) => version.split('.').map(part => Number.parseInt(part, 10) || 0)
+  const [x, y] = [parts(a), parts(b)]
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0)
+  }
+  return false
 }
 
 /** The helper's folder for the user whose home is `home`; its socket path must stay short (see helper/lib/paths.mjs). */
@@ -61,26 +76,35 @@ export function helperReply(stdout: string, stderr = ''): Reply {
   return { status: 'error', message: (stderr || stdout).trim().slice(-300) || 'the helper printed nothing' }
 }
 
-/** Runs `node helper.mjs <command> --home <dir>`; a missing node answers NO_NODE. */
+// What a host process call rejects with when the command is not there.
+const NOT_FOUND = /ENOENT|not found|no such file/i
+
+/** Runs `node helper.mjs <command> --home <dir>`; node that cannot start answers NO_NODE, a run past its limit says so. */
 async function helper(host: PlaywrightHost, home: string, command: 'start' | 'login', timeoutMs: number): Promise<Reply> {
   const argv = ['node', `${host.root}/helper/helper.mjs`, command, '--home', helperHome(home)]
-  const done = await host.run(argv, { timeoutMs }).catch(() => undefined)
-  if (!done) return { status: 'error', message: NO_NODE }
-  return helperReply(done.stdout, done.stderr)
+  try {
+    const done = await host.run(argv, { timeoutMs })
+    return helperReply(done.stdout, done.stderr)
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error)
+    if (NOT_FOUND.test(said)) return { status: 'error', message: NO_NODE }
+    return { status: 'error', message: `the helper's ${command} did not finish within ${timeoutMs / 60_000} minutes or failed: ${said.slice(0, 200)}` }
+  }
 }
 
 const failed = (reply: Reply) => reply.message ?? `the helper answered ${reply.status}`
 
 /**
  * The Browser on the helper, or why it cannot be used: not installed, no node, a helper that will not start, or a
- * browser that will not launch (the login window still open). A helper of another version is replaced first.
+ * browser that will not launch (the login window still open). A running helper of this version or newer is used as
+ * is; an older one is replaced through `start`.
  */
 export async function openPlaywright(host: PlaywrightHost): Promise<Browser | string> {
   const { home } = host
   if (!home) return 'HOME is not set'
   if (!(await host.exists(installedMarker(home)))) return NOT_SET_UP
   const health = await post(host, home, '/health').catch(() => undefined)
-  if (health?.status !== 'ok' || health.version !== host.version) {
+  if (health?.status !== 'ok' || older(String(health.version), host.version)) {
     const started = await helper(host, home, 'start', 60_000)
     if (started.status === 'not-installed') return NOT_SET_UP
     if (started.status !== 'ok') return failed(started)
@@ -98,6 +122,7 @@ export async function openPlaywright(host: PlaywrightHost): Promise<Browser | st
   return {
     name: PLAYWRIGHT,
     signIn: PLAYWRIGHT_SIGN_IN,
+    notReady: PLAYWRIGHT_BLOCKED,
     tabs: async () => {
       const tabs = listed ?? ((await call('/tabs', {})).tabs as string[])
       listed = undefined
@@ -122,7 +147,7 @@ export async function signIn(host: PlaywrightHost): Promise<string> {
   // The first run downloads Playwright and Chromium (a few hundred MB).
   const reply = await helper(host, host.home, 'login', 600_000)
   if (reply.status === 'opened') {
-    return "A Chromium window opened on chatgpt.com. Sign in there, then close the window: ChatGPT requests run in the plugin's headless Chromium after that."
+    return "A Chromium window opened on chatgpt.com. Sign in there, then quit that browser (⌘Q on macOS; closing the window leaves it running): ChatGPT requests run in the plugin's headless Chromium after that."
   }
   return `✗ ${failed(reply)}`
 }

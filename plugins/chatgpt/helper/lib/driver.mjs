@@ -1,3 +1,7 @@
+import { randomBytes } from 'node:crypto'
+
+import { PROFILE_BUSY } from './daemon.mjs'
+
 // The plugin's own Chromium, through Playwright: one persistent profile, headless, launched on first use.
 //
 // chatgpt.com's Cloudflare check refuses a browser that calls itself HeadlessChrome, so the profile runs with the
@@ -11,7 +15,11 @@ export const LAUNCH = {
   viewport: { width: 1280, height: 900 },
 }
 
-export const LOGIN_OPEN = 'the ChatGPT login window is still open: close it, then try again'
+// What a launch says when the profile is taken: the login window, or a Chromium a daemon left behind.
+export const LOGIN_OPEN = PROFILE_BUSY
+
+// How long a page script may run before its tab is given up on; the plugin's scripts return in seconds.
+export const EVAL_MS = 60_000
 
 // What Chromium says when another process holds the profile: the login window, here.
 const IN_USE = /ProcessSingleton|SingletonLock|profile (?:appears to be |is )?(?:already )?in use/i
@@ -33,10 +41,11 @@ export async function userAgentOf(chromium) {
 }
 
 /**
- * Tabs by id ('1', '2', ...) over the profile's pages, the Browser of hooks/model.ts on the helper's side. `readFile`
- * reads an upload's bytes; `now` is the clock `wait` measures its timeout with.
+ * Tabs by id over the profile's pages, the Browser of hooks/model.ts on the helper's side. An id is `<instance>-<n>`:
+ * `instance` is new for each daemon, so a session holding a tab id of a daemon that stopped never reaches a page the
+ * next daemon gave another session. `readFile` reads an upload's bytes; `now` is the clock `wait` measures with.
  */
-export function createDriver({ chromium, profile, readFile, now = Date.now }) {
+export function createDriver({ chromium, profile, readFile, now = Date.now, instance = randomBytes(3).toString('hex'), evalMs = EVAL_MS }) {
   let context
   let launching
   let next = 1
@@ -46,7 +55,7 @@ export function createDriver({ chromium, profile, readFile, now = Date.now }) {
 
   const track = page => {
     if (ids.has(page)) return
-    ids.set(page, String(next++))
+    ids.set(page, `${instance}-${next++}`)
     page.once('close', () => {
       ids.delete(page)
       fresh.delete(page)
@@ -120,9 +129,18 @@ export function createDriver({ chromium, profile, readFile, now = Date.now }) {
 
     // A function body that may await; the page's own value comes back, a string from every page script.
     async eval(id, body) {
-      return pageOf(id).evaluate(`(async () => {\n${body}\n})()`)
+      let timer
+      const late = new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`the page script in tab ${id} did not finish in ${evalMs / 1000} s`)), evalMs)
+      })
+      try {
+        return await Promise.race([pageOf(id).evaluate(`(async () => {\n${body}\n})()`), late])
+      } finally {
+        clearTimeout(timer)
+      }
     },
 
+    // Playwright's own action timeout bounds the wait for the input.
     async upload(id, selector, files) {
       const payloads = await Promise.all(files.map(async file => ({ name: file.name, mimeType: file.type, buffer: await readFile(file.path) })))
       await pageOf(id).setInputFiles(selector, payloads)
