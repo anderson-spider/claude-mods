@@ -8,7 +8,7 @@ Follow these steps exactly:
 
 1. Use `search_templates` with queries like "upscale" or "super resolution", or `tag: "Upscale"`. If a good template exists, read it with `get_template` and use it as the reference.
 
-2. Use `search_models` with `folder: "upscale_models"` to see the upscalers installed (such as 4x-UltraSharp for general use, RealESRGAN_x4plus for photos, RealESRGAN_x4plus_anime_6B for illustration; a 2x model for 2x). Pick from what is listed.
+2. Use `search_models` with `folder: "upscale_models"` to see the upscalers installed and pick from what is listed by its name: the factor (2x, 4x) and the kind of image it was trained for (photo, anime, general) are usually in the file name.
 
 3. The user must provide an input image: `upload_file` it and put the returned name in a LoadImage node.
 

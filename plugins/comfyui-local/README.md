@@ -29,11 +29,11 @@ Tools (`mcp__comfyui-local__<name>`):
 - `cancel_job`: removes a pending job, interrupts a running one, or clears the queue.
 - `upload_file`: sends a local image, video or audio file to the server's input folder and answers the name a LoadImage node takes.
 - `get_output`: downloads a finished job's files into `comfyui-outputs/` (or `directory`) named after `description`, and answers the paths.
-- `manager_packs`, `manager_search_packs`, `manager_task`: the packs installed through ComfyUI-Manager with version and state, a search of the public [Comfy Registry](https://registry.comfy.org) for packs to install, and one queued task (install, update, uninstall, disable, enable, fix). ComfyUI must be restarted afterwards for the nodes to change; the plugin does not restart it.
+- `manager_packs`, `manager_search_packs`, `manager_task`: the packs installed through ComfyUI-Manager with version, state and the recent task results, a search of the public [Comfy Registry](https://registry.comfy.org) for packs to install, and one queued task (install by registry id; update, uninstall, disable, enable or fix an installed pack by its folder or registry id). The result is reported when the task is quick, else `manager_packs` shows it; a task the Manager's security level forbids fails there. ComfyUI must be restarted afterwards for the nodes to change; the plugin does not restart it.
 
-Uploads and downloads go through `curl` on your machine, since the plugin API carries text only. Long answers are cut at 60,000 characters; use the filters and `limit`.
+Uploads and downloads go through `curl` on your machine, since the plugin API carries text only: `upload_file` and `get_output` need `curl` on the PATH (macOS and most Linux distributions ship it; Windows 10 and later too). The other tools do not. Long answers are cut at 60,000 characters; use the filters and `limit`.
 
-No tool asks for confirmation: the server is yours and local. To let Claude call them without prompts, allow `mcp__comfyui-local__*` in your permission rules, or only the read ones (`system_info`, `search_*`, `get_*`, `manager_packs`, `manager_search_packs`) if you prefer to approve each job, upload and Manager task.
+No tool asks for confirmation: the server is yours and local. To let Claude call them without prompts, allow `mcp__comfyui-local__*` in your permission rules; to approve each job, upload, download and Manager task yourself, allow only the ones that read: `system_info`, `search_nodes`, `search_models`, `search_templates`, `get_template`, `get_job_status`, `manager_packs` and `manager_search_packs`.
 
 ## Privacy
 

@@ -3,10 +3,11 @@
 // Endpoints: ComfyUI server.py (/system_stats, /object_info, /models, /prompt, /history, /queue, /interrupt,
 // /upload/image, /view, /templates, /api/workflow_templates) and ComfyUI-Manager 4 (/v2/customnode/installed,
 // /v2/manager/queue/{task,start,status,history}, /v2/manager/version); the pack catalog is the public Comfy Registry.
+// Binary transfers (the multipart upload, the downloads) go through curl, since the host's fetch carries text only.
 
 export type FetchResponse = { status: number; ok: boolean; text: string }
 export type Fetch = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<FetchResponse>
-export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+export type Run = (argv: readonly string[], init?: { timeoutMs?: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
 export type Out = { text: string; isError: boolean }
 
@@ -21,6 +22,9 @@ export const OUTPUT_DIR = 'comfyui-outputs'
 export const REGISTRY = 'https://api.comfy.org'
 
 export const MANAGER_ACTIONS = ['install', 'update', 'uninstall', 'disable', 'enable', 'fix'] as const
+/** How long an upload and a download may take, in milliseconds: the host kills the process at ten minutes at most. */
+export const UPLOAD_MS = 300_000
+export const DOWNLOAD_MS = 600_000
 export type ManagerAction = (typeof MANAGER_ACTIONS)[number]
 
 const ok = (text: string): Out => ({ text: cut(text), isError: false })
@@ -55,7 +59,7 @@ async function getJson(fetch: Fetch, base: string, path: string): Promise<{ valu
   try {
     res = await fetch(base + path)
   } catch (e) {
-    return { error: fail(`Could not reach the ComfyUI server at ${base}: ${e instanceof Error ? e.message : String(e)}`) }
+    return { error: fail(`Could not reach ${base === REGISTRY ? 'the Comfy Registry' : 'the ComfyUI server'} at ${base}: ${e instanceof Error ? e.message : String(e)}`) }
   }
   if (!res.ok) return { error: fail(`GET ${path} answered ${res.status}: ${res.text.slice(0, 2000)}`) }
   try {
@@ -378,7 +382,14 @@ export function outputFiles(entry: unknown): OutputFile[] {
   return files
 }
 
-const PROMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const PROMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const BAD_PROMPT_ID = 'prompt_id must be the UUID submit_workflow answered.'
+
+/** The prompt_id as the server keys it: lowercase, or undefined when it is not a UUID. */
+function promptId(value: unknown): string | undefined {
+  const id = str(value)?.toLowerCase()
+  return id && PROMPT_ID.test(id) ? id : undefined
+}
 
 type QueueItem = { number: number; prompt_id: string }
 
@@ -392,7 +403,9 @@ export type JobStatusInput = { prompt_id?: unknown }
 
 /** One job's state from /history/{id} and /queue (done with its outputs, failed with its messages, running or pending); without a prompt_id, the queue. */
 export async function getJobStatus(fetch: Fetch, base: string, input: JobStatusInput): Promise<Out> {
-  const id = str(input.prompt_id)
+  const given = str(input.prompt_id)
+  const id = promptId(given)
+  if (given && !id) return fail(BAD_PROMPT_ID)
   const queue = await getJson(fetch, base, '/queue')
   if (queue.error) return queue.error
   const q = isObject(queue.value) ? queue.value : {}
@@ -404,7 +417,6 @@ export async function getJobStatus(fetch: Fetch, base: string, input: JobStatusI
     pending.forEach((p, i) => lines.push(`pending ${i + 1}: ${p.prompt_id} (#${p.number})`))
     return ok(lines.join('\n'))
   }
-  if (!PROMPT_ID.test(id)) return fail('prompt_id must be the UUID submit_workflow answered.')
   const history = await getJson(fetch, base, `/history/${id}`)
   if (history.error) return history.error
   const entry = isObject(history.value) ? history.value[id] : undefined
@@ -437,12 +449,16 @@ export type CancelInput = { prompt_id?: unknown; clear_pending?: unknown }
 
 /** Deletes a pending job from the queue, interrupts a running one, or with no prompt_id interrupts whatever runs; `clear_pending` empties the queue. */
 export async function cancelJob(fetch: Fetch, base: string, input: CancelInput): Promise<Out> {
-  const id = str(input.prompt_id)
-  if (id && !PROMPT_ID.test(id)) return fail('prompt_id must be the UUID submit_workflow answered.')
+  const given = str(input.prompt_id)
+  const id = promptId(given)
+  if (given && !id) return fail(BAD_PROMPT_ID)
   const done: string[] = []
+  /** A POST the server did not accept is an error, with what it said. */
+  const refused = (what: string, res: FetchResponse) => fail(`${what} answered ${res.status}: ${res.text.slice(0, 500)}`)
   if (input.clear_pending === true) {
     const cleared = await postJson(fetch, base, '/queue', { clear: true })
     if (cleared.error) return cleared.error
+    if (!cleared.res.ok) return refused('POST /queue', cleared.res)
     done.push('pending queue cleared')
   }
   if (id) {
@@ -452,17 +468,23 @@ export async function cancelJob(fetch: Fetch, base: string, input: CancelInput):
     if (queueItems(q.queue_pending).some((p) => p.prompt_id === id)) {
       const deleted = await postJson(fetch, base, '/queue', { delete: [id] })
       if (deleted.error) return deleted.error
+      if (!deleted.res.ok) return refused('POST /queue', deleted.res)
       done.push(`${id} removed from the pending queue`)
     } else if (queueItems(q.queue_running).some((r) => r.prompt_id === id)) {
       const stopped = await postJson(fetch, base, '/interrupt', { prompt_id: id })
       if (stopped.error) return stopped.error
+      if (!stopped.res.ok) return refused('POST /interrupt', stopped.res)
       done.push(`${id} interrupted`)
     } else {
       return fail(`${id} is not running or pending.${done.length ? ` (${done.join('; ')})` : ''}`)
     }
   } else if (input.clear_pending !== true) {
+    const queue = await getJson(fetch, base, '/queue')
+    if (queue.error) return queue.error
+    if (!queueItems(isObject(queue.value) ? queue.value.queue_running : undefined).length) return ok('nothing is running, so there was nothing to interrupt')
     const stopped = await postJson(fetch, base, '/interrupt', {})
     if (stopped.error) return stopped.error
+    if (!stopped.res.ok) return refused('POST /interrupt', stopped.res)
     done.push('the running job was interrupted')
   }
   return ok(done.join('; '))
@@ -480,10 +502,20 @@ export function safeSubfolder(value: unknown): string | undefined {
   return name
 }
 
-/** The curl argv that uploads `file` as multipart `image` to /upload/image; curl's own quoting keeps odd file names whole. */
+/**
+ * The curl argv that uploads `file` as multipart `image` to /upload/image. curl's own quoting keeps odd file names whole,
+ * and the text fields go as `--form-string`, which never reads a file: a `-F` value starting with `@` or `<` would.
+ */
 export function uploadArgv(base: string, file: string, subfolder: string, overwrite: boolean): string[] {
   const quoted = `"${file.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
-  return ['curl', '-sS', '--max-time', '300', '-F', `image=@${quoted}`, '-F', `subfolder=${subfolder}`, '-F', `overwrite=${overwrite ? 'true' : 'false'}`, '-F', 'type=input', `${base}/upload/image`]
+  return [
+    'curl', '-sS', '--max-time', String(UPLOAD_MS / 1000 - 10),
+    '-F', `image=@${quoted}`,
+    '--form-string', `subfolder=${subfolder}`,
+    '--form-string', `overwrite=${overwrite ? 'true' : 'false'}`,
+    '--form-string', 'type=input',
+    `${base}/upload/image`,
+  ]
 }
 
 /** Uploads a local file to the server's input folder and answers the name a LoadImage node takes. */
@@ -495,7 +527,7 @@ export async function uploadFile(run: Run, exists: (path: string) => Promise<boo
   if (subfolder === undefined) return fail('subfolder must be a relative folder name without "..".')
   let result: Awaited<ReturnType<Run>>
   try {
-    result = await run(uploadArgv(base, file, subfolder, input.overwrite === true))
+    result = await run(uploadArgv(base, file, subfolder, input.overwrite === true), { timeoutMs: UPLOAD_MS })
   } catch (e) {
     return fail(`curl could not run: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -523,8 +555,8 @@ export function viewUrl(base: string, file: OutputFile): string {
 
 /** Downloads a finished job's output files with curl into `directory` (default comfyui-outputs/) and answers their paths. */
 export async function getOutput(fetch: Fetch, run: Run, base: string, input: GetOutputInput): Promise<Out> {
-  const id = str(input.prompt_id)
-  if (!id || !PROMPT_ID.test(id)) return fail('prompt_id must be the UUID submit_workflow answered.')
+  const id = promptId(input.prompt_id)
+  if (!id) return fail(BAD_PROMPT_ID)
   const history = await getJson(fetch, base, `/history/${id}`)
   if (history.error) return history.error
   const entry = isObject(history.value) ? history.value[id] : undefined
@@ -536,10 +568,10 @@ export async function getOutput(fetch: Fetch, run: Run, base: string, input: Get
   const saved: string[] = []
   const failed: string[] = []
   for (const [i, file] of files.entries()) {
-    const ext = file.filename.includes('.') ? file.filename.slice(file.filename.lastIndexOf('.')) : ''
+    const ext = (/\.[A-Za-z0-9]{1,8}$/.exec(file.filename) ?? [''])[0]
     const target = `${dir}/${name}${files.length > 1 ? `-${i + 1}` : ''}${ext}`
     try {
-      const res = await run(['curl', '-sS', '-f', '--max-time', '600', '--create-dirs', '-o', target, viewUrl(base, file)])
+      const res = await run(['curl', '-sS', '-f', '--max-time', String(DOWNLOAD_MS / 1000 - 10), '--create-dirs', '-o', target, viewUrl(base, file)], { timeoutMs: DOWNLOAD_MS })
       if (res.exitCode === 0) saved.push(target)
       else failed.push(`${file.filename}: ${res.stderr.trim() || `curl exited ${res.exitCode}`}`)
     } catch (e) {
@@ -554,6 +586,38 @@ export async function getOutput(fetch: Fetch, run: Run, base: string, input: Get
 
 const MANAGER_OFF = 'ComfyUI-Manager answered 404: it is not installed on this server, or it is older than version 4 (the plugin uses its /v2 API).'
 
+/** The Manager's version text, or undefined when it does not answer. */
+async function managerVersion(fetch: Fetch, base: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${base}/v2/manager/version`)
+    return res.ok ? res.text.replace(/^"|"$/g, '') : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export type InstalledPack = { folder: string; cnr_id?: string; aux_id?: string; ver: string; enabled: boolean }
+
+/** The packs /v2/customnode/installed lists: the folder under custom_nodes, its registry id when it came from the registry, else its git id. */
+function installedPacks(value: unknown): InstalledPack[] {
+  return Object.entries(isObject(value) ? value : {}).map(([folder, info]) => {
+    const p = isObject(info) ? info : {}
+    return { folder, cnr_id: typeof p.cnr_id === 'string' ? p.cnr_id : undefined, aux_id: typeof p.aux_id === 'string' ? p.aux_id : undefined, ver: String(p.ver ?? '?'), enabled: p.enabled !== false }
+  })
+}
+
+/** The Manager's recent task results from /v2/manager/queue/history, one line each. */
+function taskLines(value: unknown): string[] {
+  const history = isObject(value) && isObject(value.history) ? value.history : {}
+  return Object.entries(history).map(([uiId, item]) => {
+    const t = isObject(item) ? item : {}
+    const status = isObject(t.status) ? t.status : {}
+    const params = isObject(t.params) ? t.params : {}
+    const target = String(params.id ?? params.node_name ?? params.cnr_id ?? '')
+    return `${uiId}: ${String(t.kind ?? '?')} ${target} -> ${String(status.status_str ?? t.result ?? '?')}${Array.isArray(status.messages) && status.messages.length ? ` (${status.messages.map(String).join('; ')})` : ''}`
+  })
+}
+
 export type PacksInput = { state?: unknown }
 
 /** The installed node packs with their version and state, the Manager's version and its task queue. */
@@ -561,26 +625,19 @@ export async function managerPacks(fetch: Fetch, base: string, input: PacksInput
   const installed = await getJson(fetch, base, '/v2/customnode/installed')
   if (installed.error) return installed.error.text.includes('404') ? fail(MANAGER_OFF) : installed.error
   const state = str(input.state)?.toLowerCase()
-  const packs = isObject(installed.value) ? installed.value : {}
   const lines: string[] = []
-  for (const [dir, info] of Object.entries(packs)) {
-    const p = isObject(info) ? info : {}
-    const enabled = p.enabled !== false
-    if (state === 'enabled' && !enabled) continue
-    if (state === 'disabled' && enabled) continue
-    lines.push(`${dir}: ${String(p.ver ?? '?')}${p.cnr_id ? ` (registry id ${String(p.cnr_id)})` : p.aux_id ? ` (${String(p.aux_id)})` : ''}${enabled ? '' : ' [disabled]'}`)
+  for (const p of installedPacks(installed.value)) {
+    if (state === 'enabled' && !p.enabled) continue
+    if (state === 'disabled' && p.enabled) continue
+    lines.push(`${p.folder}: ${p.ver}${p.cnr_id ? ` (registry id ${p.cnr_id})` : p.aux_id ? ` (${p.aux_id}, not from the registry)` : ''}${p.enabled ? '' : ' [disabled]'}`)
   }
-  let version = '?'
-  try {
-    const v = await fetch(`${base}/v2/manager/version`)
-    if (v.ok) version = v.text.replace(/^"|"$/g, '')
-  } catch {
-    version = '?'
-  }
+  const version = (await managerVersion(fetch, base)) ?? '?'
   const queue = await getJson(fetch, base, '/v2/manager/queue/status')
   const q = !queue.error && isObject(queue.value) ? queue.value : {}
   const head = `ComfyUI-Manager ${version}: ${lines.length} pack${lines.length === 1 ? '' : 's'}${state ? ` (${state})` : ''}; task queue: ${String(q.in_progress_count ?? 0)} in progress, ${String(q.pending_count ?? 0)} pending, ${String(q.done_count ?? 0)} done${q.is_processing ? ', processing' : ''}.`
-  return ok(`${head}\n${lines.join('\n')}`)
+  const history = await getJson(fetch, base, '/v2/manager/queue/history?max_items=5')
+  const tasks = history.error ? [] : taskLines(history.value)
+  return ok(`${head}\n${lines.join('\n')}${tasks.length ? `\n\nRecent tasks:\n${tasks.join('\n')}` : ''}`)
 }
 
 export type SearchPacksInput = { query?: unknown; limit?: unknown }
@@ -606,49 +663,63 @@ export async function searchPacks(fetch: Fetch, input: SearchPacksInput): Promis
 
 export type ManagerTaskInput = { action?: unknown; pack?: unknown; version?: unknown; repository?: unknown }
 
-/** The Manager 4 task body for one action, or why there is none. `pack` is the registry id (install, enable) or the installed folder name (update, uninstall, disable, fix). */
-export function managerTask(input: ManagerTaskInput, uiId: string): { task: Record<string, unknown>; error?: undefined } | { task?: undefined; error: string } {
+/**
+ * The Manager 4 task body for one action, or why there is none. For install, `pack` is the registry id. For the other
+ * actions it names an installed pack (its folder or registry id, as manager_packs lists them): the worker keys a pack
+ * from the registry by its registry id (`cnr_map[node_name]`), and one cloned from git by its folder with `is_unknown`.
+ */
+export function managerTask(input: ManagerTaskInput, uiId: string, installed: readonly InstalledPack[]): { task: Record<string, unknown>; error?: undefined } | { task?: undefined; error: string } {
   const action = str(input.action) as ManagerAction | undefined
   if (!action || !MANAGER_ACTIONS.includes(action)) return { error: `action must be one of ${MANAGER_ACTIONS.join(', ')}.` }
   const pack = str(input.pack)
-  if (!pack || /[\s/\\]/.test(pack)) return { error: 'pack must be a registry id (install, enable) or an installed pack name (update, uninstall, disable, fix), without spaces or slashes.' }
+  if (!pack || /[\s/\\]/.test(pack)) return { error: 'pack must be a registry id (install) or an installed pack name from manager_packs (update, uninstall, disable, enable, fix), without spaces or slashes.' }
   const version = str(input.version)
   const repository = str(input.repository)
+  if (action === 'install') {
+    const selected = version ?? 'latest'
+    if (selected === 'nightly' && !repository) return { error: 'installing the nightly version needs the repository URL.' }
+    const params = { id: pack, version: selected, selected_version: selected, mode: 'cache', channel: 'default', skip_post_install: false, ...(repository ? { repository } : {}) }
+    return { task: { ui_id: uiId, client_id: 'comfyui-local', kind: action, params } }
+  }
+  const found = installed.find((p) => p.folder === pack || p.cnr_id === pack)
+  if (!found) return { error: `${pack} is not an installed pack: use a folder or registry id that manager_packs lists.` }
+  const name = found.cnr_id ?? found.folder
+  const unknown = found.cnr_id === undefined
   let params: Record<string, unknown>
   switch (action) {
-    case 'install': {
-      const selected = version ?? 'latest'
-      if (selected === 'nightly' && !repository) return { error: 'installing the nightly version needs the repository URL.' }
-      params = { id: pack, version: selected, selected_version: selected, mode: 'cache', channel: 'default', skip_post_install: false, ...(repository ? { repository } : {}) }
-      break
-    }
     case 'update':
-      params = { node_name: pack, ...(version ? { node_ver: version } : {}) }
+      params = { node_name: name, ...(version ? { node_ver: version } : found.ver !== '?' ? { node_ver: found.ver } : {}) }
       break
     case 'uninstall':
     case 'disable':
-      params = { node_name: pack, is_unknown: false }
+      params = { node_name: name, is_unknown: unknown }
       break
     case 'enable':
-      params = { cnr_id: pack }
+      if (unknown) return { error: `${pack} did not come from the registry, so the Manager cannot enable it by id: enable it from the Manager UI.` }
+      params = { cnr_id: name }
       break
     case 'fix':
-      params = { node_name: pack, node_ver: version ?? 'unknown' }
+      params = { node_name: name, node_ver: version ?? found.ver }
       break
   }
   return { task: { ui_id: uiId, client_id: 'comfyui-local', kind: action, params } }
 }
 
-/** Queues one Manager task and starts the worker; the result comes later through manager_packs or the Manager's own log. */
+/** Queues one Manager task, starts the worker and reports the result when it is already in the history (a quick task), else where to look. */
 export async function runManagerTask(fetch: Fetch, base: string, input: ManagerTaskInput, uiId: string): Promise<Out> {
-  const built = managerTask(input, uiId)
+  const installed = await getJson(fetch, base, '/v2/customnode/installed')
+  if (installed.error) return installed.error.text.includes('404') ? fail(MANAGER_OFF) : installed.error
+  const built = managerTask(input, uiId, installedPacks(installed.value))
   if (built.error !== undefined) return fail(built.error)
   const queued = await postJson(fetch, base, '/v2/manager/queue/task', built.task)
   if (queued.error) return queued.error
-  if (queued.res.status === 404) return fail(MANAGER_OFF)
   if (!queued.res.ok) return fail(`The Manager refused the task (${queued.res.status}): ${queued.res.text.slice(0, 1000)}`)
   const started = await postJson(fetch, base, '/v2/manager/queue/start', {})
   if (started.error) return started.error
   if (!started.res.ok && started.res.status !== 201) return fail(`Task queued but the worker did not start (${started.res.status}): ${started.res.text.slice(0, 500)}`)
-  return ok(`${String(built.task.kind)} of ${String(str(input.pack))} queued (task ${uiId}). Check progress with manager_packs; a restart of ComfyUI is needed before new or removed nodes show in search_nodes.`)
+  const history = await getJson(fetch, base, `/v2/manager/queue/history?ui_id=${encodeURIComponent(uiId)}`)
+  const done = history.error ? [] : taskLines(history.value)
+  const what = `${String(built.task.kind)} of ${String(str(input.pack))}`
+  if (done.length) return done.some((line) => /-> (failed|error)/.test(line)) ? fail(`${what} failed: ${done.join('; ')}. The Manager's security level may forbid it (see the server log).`) : ok(`${what} done: ${done.join('; ')}. Restart ComfyUI for the nodes to change.`)
+  return ok(`${what} queued (task ${uiId}). manager_packs shows the task queue and recent results; a restart of ComfyUI is needed before new or removed nodes show in search_nodes.`)
 }

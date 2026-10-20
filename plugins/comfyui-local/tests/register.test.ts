@@ -75,5 +75,6 @@ test('manager_task refuses a bad action before any request', ON, async ($, on) =
   await started($, tools)
   const result = await $.tool.call({ tool: id('manager_task'), action: 'reboot', pack: 'p' } as never)
   expect(result.isError).toBe(true)
-  expect(sent).toEqual([])
+  // the installed list is read first, to key the pack the way the Manager does; a bad action still queues nothing
+  expect(sent.map((s) => s.method)).toEqual(['GET'])
 })

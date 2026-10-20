@@ -50,7 +50,7 @@ async function run($: EngineInterface, options: { url?: unknown }, work: Work): 
     await work({
       base: access.base,
       fetch: (url, init) => $.http.fetch(url, init),
-      run: (argv) => $.process.run(argv),
+      run: (argv, init) => $.process.run(argv, init),
       exists: (path) => $.fs.exists(path),
     }),
   )
@@ -139,12 +139,12 @@ export const register: Register = (on, options) => {
     })
     await $.tool.register({
       name: 'cancel_job',
-      description: 'Remove a pending job or interrupt a running one; without prompt_id, interrupt whatever runs. clear_pending empties the queue.',
+      description: 'Remove a pending job or interrupt a running one; without prompt_id, interrupt whatever runs (or, with clear_pending, empty the pending queue instead).',
       inputSchema: {
         type: 'object',
         properties: {
           prompt_id: { type: 'string', description: PROMPT_ID },
-          clear_pending: { type: 'boolean', description: 'Also delete every pending job.' },
+          clear_pending: { type: 'boolean', description: 'Delete every pending job (with no prompt_id, only that).' },
         },
       } satisfies SchemaFor<Inputs['mcp__comfyui-local__cancel_job']>,
     })
@@ -194,12 +194,12 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'manager_task',
       description:
-        'Queue a ComfyUI-Manager task on a node pack: install (registry id), update, uninstall, disable or fix (installed pack name), enable (registry id). ComfyUI must be restarted afterwards for the nodes to change.',
+        'Queue a ComfyUI-Manager task on a node pack: install (a registry id from manager_search_packs), or update, uninstall, disable, enable or fix an installed pack (a folder or registry id from manager_packs). ComfyUI must be restarted afterwards for the nodes to change.',
       inputSchema: {
         type: 'object',
         properties: {
           action: { type: 'string', enum: allOf<Inputs['mcp__comfyui-local__manager_task']['action']>()(...MANAGER_ACTIONS) },
-          pack: { type: 'string', description: 'The registry id (install, enable) or the installed pack name from manager_packs (update, uninstall, disable, fix).' },
+          pack: { type: 'string', description: 'The registry id (install) or the installed pack folder or registry id from manager_packs (other actions).' },
           version: { type: 'string', description: 'For install: a version, "latest" (default) or "nightly" (needs repository). For update and fix: the current version.' },
           repository: { type: 'string', description: 'The GitHub URL, required for a nightly install.' },
         },

@@ -222,6 +222,11 @@ test('cancelJob deletes a pending job, interrupts a running one, or clears the q
   expect(calls.at(-1)?.body).toBe(JSON.stringify({ clear: true }))
   const gone = await cancelJob(fetch, BASE, { prompt_id: '33333333-2222-4333-8444-555555555555' })
   expect(gone.isError).toBe(true)
+  expect((await cancelJob(server({ 'GET /queue': { body: {} } }).fetch, BASE, {})).text).toBe('nothing is running, so there was nothing to interrupt')
+  const refused = server({ 'GET /queue': { body: { queue_running: [[1, ID, {}, {}, []]] } }, 'POST /interrupt': { status: 500, body: 'boom' } })
+  const err = await cancelJob(refused.fetch, BASE, {})
+  expect(err.isError).toBe(true)
+  expect(err.text).toBe('POST /interrupt answered 500: boom')
 })
 
 test('safeSubfolder, uploadArgv, slug and viewUrl shape what curl sends', () => {
@@ -229,7 +234,11 @@ test('safeSubfolder, uploadArgv, slug and viewUrl shape what curl sends', () => 
   expect(safeSubfolder('refs/cats')).toBe('refs/cats')
   expect(safeSubfolder('../x')).toBeUndefined()
   expect(safeSubfolder('/abs')).toBeUndefined()
-  expect(uploadArgv(BASE, '/tmp/my "pic";1.png', 'refs', true)).toEqual(['curl', '-sS', '--max-time', '300', '-F', 'image=@"/tmp/my \\"pic\\";1.png"', '-F', 'subfolder=refs', '-F', 'overwrite=true', '-F', 'type=input', `${BASE}/upload/image`])
+  expect(uploadArgv(BASE, '/tmp/my "pic";1.png', 'refs', true)).toEqual(['curl', '-sS', '--max-time', '290', '-F', 'image=@"/tmp/my \\"pic\\";1.png"', '--form-string', 'subfolder=refs', '--form-string', 'overwrite=true', '--form-string', 'type=input', `${BASE}/upload/image`])
+  // a text field is never read from a file: a subfolder of "<" or "@" stays a literal under --form-string
+  expect(safeSubfolder('</etc/passwd')).toBe('</etc/passwd')
+  expect(uploadArgv(BASE, '/tmp/a.png', '@/etc/passwd', false)).toContain('subfolder=@/etc/passwd')
+  expect(uploadArgv(BASE, '/tmp/a.png', '@/etc/passwd', false).filter((a) => a === '-F')).toEqual(['-F'])
   expect(slug('Cat Astronaut, in space!', ID)).toBe('cat-astronaut-in-space')
   expect(slug(undefined, ID)).toBe('11111111')
   expect(viewUrl(BASE, { node: '9', kind: 'images', filename: 'a b.png', subfolder: 'sub', type: 'output' })).toBe(`${BASE}/view?filename=a+b.png&subfolder=sub&type=output`)
@@ -239,11 +248,13 @@ const ran = (exitCode: number, stdout = '', stderr = '') => ({ exitCode, stdout,
 
 test('uploadFile runs curl and answers the server file name, or why not', async () => {
   const argvs: string[][] = []
-  const run: Run = async (argv) => (argvs.push([...argv]), ran(0, JSON.stringify({ name: 'cat.png', subfolder: 'refs', type: 'input' })))
+  const inits: unknown[] = []
+  const run: Run = async (argv, init) => (argvs.push([...argv]), inits.push(init), ran(0, JSON.stringify({ name: 'cat.png', subfolder: 'refs', type: 'input' })))
   const exists = async (path: string) => path === '/tmp/cat.png'
   const out = await uploadFile(run, exists, BASE, { path: '/tmp/cat.png', subfolder: 'refs' })
   expect(out.text).toBe('Uploaded as refs/cat.png (type input). Use "refs/cat.png" as the image input of a LoadImage node.')
   expect(argvs[0]?.[0]).toBe('curl')
+  expect(inits[0]).toEqual({ timeoutMs: 300_000 })
   expect((await uploadFile(run, exists, BASE, { path: '/tmp/none.png' })).text).toBe('No file at /tmp/none.png.')
   expect((await uploadFile(run, exists, BASE, {})).isError).toBe(true)
   expect((await uploadFile(run, exists, BASE, { path: '/tmp/cat.png', subfolder: '../x' })).isError).toBe(true)
@@ -257,11 +268,13 @@ test('getOutput downloads each output file with curl into the folder and names t
   const two = { [ID]: { outputs: { '9': { images: [{ filename: 'a.png', subfolder: '', type: 'output' }, { filename: 'b.png', subfolder: 'x', type: 'output' }] }, '5': { images: [{ filename: 'p.png', subfolder: '', type: 'temp' }] } }, status: { status_str: 'success', completed: true } } }
   const { fetch } = server({ [`GET /history/${ID}`]: { body: two } })
   const argvs: string[][] = []
-  const run: Run = async (argv) => (argvs.push([...argv]), ran(0))
+  const inits: unknown[] = []
+  const run: Run = async (argv, init) => (argvs.push([...argv]), inits.push(init), ran(0))
   const out = await getOutput(fetch, run, BASE, { prompt_id: ID, description: 'Cat astronaut' })
   expect(out.text).toBe('Saved 3 files:\ncomfyui-outputs/cat-astronaut-1.png\ncomfyui-outputs/cat-astronaut-2.png\ncomfyui-outputs/cat-astronaut-3.png')
   // node ids order numerically, so node 5's preview comes first
-  expect(argvs[2]).toEqual(['curl', '-sS', '-f', '--max-time', '600', '--create-dirs', '-o', 'comfyui-outputs/cat-astronaut-3.png', `${BASE}/view?filename=b.png&subfolder=x&type=output`])
+  expect(argvs[2]).toEqual(['curl', '-sS', '-f', '--max-time', '590', '--create-dirs', '-o', 'comfyui-outputs/cat-astronaut-3.png', `${BASE}/view?filename=b.png&subfolder=x&type=output`])
+  expect(inits[0]).toEqual({ timeoutMs: 600_000 })
   const one = server({ [`GET /history/${ID}`]: { body: DONE } })
   expect((await getOutput(one.fetch, run, BASE, { prompt_id: ID, directory: '/out/' })).text).toBe('Saved 1 file:\n/out/11111111.png')
   const failing: Run = async () => ran(22, '', 'curl: (22) 404')
@@ -269,6 +282,7 @@ test('getOutput downloads each output file with curl into the folder and names t
   expect(err.isError).toBe(true)
   expect(err.text).toBe('Failed:\nComfyUI_00001_.png: curl: (22) 404')
   expect((await getOutput(one.fetch, run, BASE, { prompt_id: 'x' })).isError).toBe(true)
+  expect((await getOutput(one.fetch, run, BASE, { prompt_id: ID.toUpperCase(), directory: '/out' })).text).toBe('Saved 1 file:\n/out/11111111.png')
   const empty = server({ [`GET /history/${ID}`]: { body: {} } })
   expect((await getOutput(empty.fetch, run, BASE, { prompt_id: ID })).text).toContain('not in the history yet')
 })
@@ -278,9 +292,10 @@ test('managerPacks lists the packs with state, the Manager version and its queue
     'GET /v2/customnode/installed': { body: { 'ComfyUI-DyPE': { ver: '2.19.1', cnr_id: 'ComfyUI-DyPE', aux_id: null, enabled: true }, old: { ver: 'abc123', cnr_id: null, aux_id: 'me/old', enabled: false } } },
     'GET /v2/manager/version': { body: 'V4.2.2' },
     'GET /v2/manager/queue/status': { body: { total_count: 1, done_count: 0, in_progress_count: 1, pending_count: 0, is_processing: true } },
+    'GET /v2/manager/queue/history?max_items=5': { body: { history: { u1: { kind: 'install', params: { id: 'comfyui-pixel' }, status: { status_str: 'success', completed: true, messages: [] } } } } },
   })
   const out = await managerPacks(fetch, BASE, {})
-  expect(out.text).toBe('ComfyUI-Manager V4.2.2: 2 packs; task queue: 1 in progress, 0 pending, 0 done, processing.\nComfyUI-DyPE: 2.19.1 (registry id ComfyUI-DyPE)\nold: abc123 (me/old) [disabled]')
+  expect(out.text).toBe('ComfyUI-Manager V4.2.2: 2 packs; task queue: 1 in progress, 0 pending, 0 done, processing.\nComfyUI-DyPE: 2.19.1 (registry id ComfyUI-DyPE)\nold: abc123 (me/old, not from the registry) [disabled]\n\nRecent tasks:\nu1: install comfyui-pixel -> success')
   expect((await managerPacks(fetch, BASE, { state: 'disabled' })).text).toContain('1 pack (disabled);')
   const none = await managerPacks(server({}).fetch, BASE, {})
   expect(none.isError).toBe(true)
@@ -289,34 +304,55 @@ test('managerPacks lists the packs with state, the Manager version and its queue
 
 test('searchPacks queries the Comfy Registry', async () => {
   const { fetch, calls } = server({ 'GET https://api.comfy.org/nodes?search=pixel%20art&limit=5': { body: { nodes: [{ id: 'comfyui-pixel', name: 'Pixel Art', description: 'Pixelates.\nMore.', repository: 'https://github.com/x/y', downloads: 12, latest_version: { version: '1.2.0' } }] } } })
+  const down: Fetch = async () => { throw new Error('ENOTFOUND') }
+  expect((await searchPacks(down, { query: 'x' })).text).toBe('Could not reach the Comfy Registry at https://api.comfy.org: ENOTFOUND')
   const out = await searchPacks(fetch, { query: 'pixel art', limit: 5 })
   expect(out.text).toBe('1 pack (install one with manager_task action install and its id):\n\n## Pixel Art (id: comfyui-pixel, latest 1.2.0)\nPixelates.\nrepository: https://github.com/x/y\ndownloads: 12')
   expect(calls[0]?.url).toBe('https://api.comfy.org/nodes?search=pixel%20art&limit=5')
   expect((await searchPacks(fetch, {})).isError).toBe(true)
 })
 
-test('managerTask builds the Manager 4 task body per action', () => {
-  expect(managerTask({ action: 'install', pack: 'comfyui-pixel' }, 'u1').task).toEqual({ ui_id: 'u1', client_id: 'comfyui-local', kind: 'install', params: { id: 'comfyui-pixel', version: 'latest', selected_version: 'latest', mode: 'cache', channel: 'default', skip_post_install: false } })
-  expect(managerTask({ action: 'install', pack: 'p', version: 'nightly', repository: 'https://github.com/x/p' }, 'u').task?.params).toEqual(expect.objectContaining({ selected_version: 'nightly', repository: 'https://github.com/x/p' }))
-  expect(managerTask({ action: 'install', pack: 'p', version: 'nightly' }, 'u').error).toContain('repository')
-  expect(managerTask({ action: 'update', pack: 'p', version: '1.0.0' }, 'u').task?.params).toEqual({ node_name: 'p', node_ver: '1.0.0' })
-  expect(managerTask({ action: 'uninstall', pack: 'p' }, 'u').task?.params).toEqual({ node_name: 'p', is_unknown: false })
-  expect(managerTask({ action: 'disable', pack: 'p' }, 'u').task?.kind).toBe('disable')
-  expect(managerTask({ action: 'enable', pack: 'p' }, 'u').task?.params).toEqual({ cnr_id: 'p' })
-  expect(managerTask({ action: 'fix', pack: 'p' }, 'u').task?.params).toEqual({ node_name: 'p', node_ver: 'unknown' })
-  expect(managerTask({ action: 'reboot', pack: 'p' }, 'u').error).toContain('action must be one of')
-  expect(managerTask({ action: 'install', pack: 'a b' }, 'u').error).toContain('pack must be')
+const INSTALLED = [
+  { folder: 'ComfyUI-DyPE', cnr_id: 'comfyui-dype', ver: '2.19.1', enabled: true },
+  { folder: 'old', aux_id: 'me/old', ver: 'abc123', enabled: false },
+]
+
+test('managerTask builds the Manager 4 task body per action, keying installed packs the way the worker does', () => {
+  expect(managerTask({ action: 'install', pack: 'comfyui-pixel' }, 'u1', INSTALLED).task).toEqual({ ui_id: 'u1', client_id: 'comfyui-local', kind: 'install', params: { id: 'comfyui-pixel', version: 'latest', selected_version: 'latest', mode: 'cache', channel: 'default', skip_post_install: false } })
+  expect(managerTask({ action: 'install', pack: 'p', version: 'nightly', repository: 'https://github.com/x/p' }, 'u', INSTALLED).task?.params).toEqual(expect.objectContaining({ selected_version: 'nightly', repository: 'https://github.com/x/p' }))
+  expect(managerTask({ action: 'install', pack: 'p', version: 'nightly' }, 'u', INSTALLED).error).toContain('repository')
+  // a registry pack goes by its registry id, whether named by folder or id; the version defaults to the installed one
+  expect(managerTask({ action: 'update', pack: 'ComfyUI-DyPE' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'comfyui-dype', node_ver: '2.19.1' })
+  expect(managerTask({ action: 'update', pack: 'comfyui-dype', version: '1.0.0' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'comfyui-dype', node_ver: '1.0.0' })
+  expect(managerTask({ action: 'uninstall', pack: 'ComfyUI-DyPE' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'comfyui-dype', is_unknown: false })
+  // a git-cloned pack goes by its folder as unknown
+  expect(managerTask({ action: 'uninstall', pack: 'old' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'old', is_unknown: true })
+  expect(managerTask({ action: 'disable', pack: 'old' }, 'u', INSTALLED).task?.kind).toBe('disable')
+  expect(managerTask({ action: 'enable', pack: 'ComfyUI-DyPE' }, 'u', INSTALLED).task?.params).toEqual({ cnr_id: 'comfyui-dype' })
+  expect(managerTask({ action: 'enable', pack: 'old' }, 'u', INSTALLED).error).toContain('did not come from the registry')
+  expect(managerTask({ action: 'fix', pack: 'ComfyUI-DyPE' }, 'u', INSTALLED).task?.params).toEqual({ node_name: 'comfyui-dype', node_ver: '2.19.1' })
+  expect(managerTask({ action: 'update', pack: 'nope' }, 'u', INSTALLED).error).toContain('not an installed pack')
+  expect(managerTask({ action: 'reboot', pack: 'p' }, 'u', INSTALLED).error).toContain('action must be one of')
+  expect(managerTask({ action: 'install', pack: 'a b' }, 'u', INSTALLED).error).toContain('pack must be')
 })
 
-test('runManagerTask queues the task, starts the worker and reports; a 404 means no Manager', async () => {
-  const { fetch, calls } = server({ 'POST /v2/manager/queue/task': { body: '' }, 'POST /v2/manager/queue/start': { status: 201, body: '' } })
+test('runManagerTask queues the task, starts the worker and reports the result when it is already there; a 404 means no Manager', async () => {
+  const installed = { 'GET /v2/customnode/installed': { body: { old: { ver: 'abc', cnr_id: null, aux_id: 'me/old', enabled: true } } } }
+  const { fetch, calls } = server({ ...installed, 'POST /v2/manager/queue/task': { body: '' }, 'POST /v2/manager/queue/start': { status: 201, body: '' } })
   const out = await runManagerTask(fetch, BASE, { action: 'install', pack: 'comfyui-pixel' }, 'u1')
-  expect(out.text).toBe('install of comfyui-pixel queued (task u1). Check progress with manager_packs; a restart of ComfyUI is needed before new or removed nodes show in search_nodes.')
-  expect(calls.map((c) => `${c.method} ${c.url.slice(BASE.length)}`)).toEqual(['POST /v2/manager/queue/task', 'POST /v2/manager/queue/start'])
+  expect(out.text).toBe('install of comfyui-pixel queued (task u1). manager_packs shows the task queue and recent results; a restart of ComfyUI is needed before new or removed nodes show in search_nodes.')
+  expect(calls.map((c) => `${c.method} ${c.url.slice(BASE.length)}`)).toEqual(['GET /v2/customnode/installed', 'POST /v2/manager/queue/task', 'POST /v2/manager/queue/start', 'GET /v2/manager/queue/history?ui_id=u1'])
+  expect(JSON.parse(calls[1]?.body ?? '')).toEqual({ ui_id: 'u1', client_id: 'comfyui-local', kind: 'install', params: expect.objectContaining({ id: 'comfyui-pixel' }) })
+  const quick = server({ ...installed, 'POST /v2/manager/queue/task': { body: '' }, 'POST /v2/manager/queue/start': { body: '' }, 'GET /v2/manager/queue/history?ui_id=u2': { body: { history: { u2: { kind: 'disable', params: { node_name: 'old' }, status: { status_str: 'success', completed: true, messages: [] } } } } } })
+  expect((await runManagerTask(quick.fetch, BASE, { action: 'disable', pack: 'old' }, 'u2')).text).toBe('disable of old done: u2: disable old -> success. Restart ComfyUI for the nodes to change.')
+  const failed = server({ ...installed, 'POST /v2/manager/queue/task': { body: '' }, 'POST /v2/manager/queue/start': { body: '' }, 'GET /v2/manager/queue/history?ui_id=u3': { body: { history: { u3: { kind: 'uninstall', params: { node_name: 'old' }, status: { status_str: 'failed', completed: true, messages: ['security level'] } } } } } })
+  const err = await runManagerTask(failed.fetch, BASE, { action: 'uninstall', pack: 'old' }, 'u3')
+  expect(err.isError).toBe(true)
+  expect(err.text).toContain('uninstall of old failed: u3: uninstall old -> failed (security level)')
   const none = await runManagerTask(server({}).fetch, BASE, { action: 'install', pack: 'p' }, 'u')
   expect(none.isError).toBe(true)
   expect(none.text).toContain('not installed on this server')
-  const refused = await runManagerTask(server({ 'POST /v2/manager/queue/task': { status: 400, body: 'Invalid task data' } }).fetch, BASE, { action: 'install', pack: 'p' }, 'u')
+  const refused = await runManagerTask(server({ ...installed, 'POST /v2/manager/queue/task': { status: 400, body: 'Invalid task data' } }).fetch, BASE, { action: 'install', pack: 'p' }, 'u')
   expect(refused.text).toBe('The Manager refused the task (400): Invalid task data')
 })
 
