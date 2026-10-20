@@ -12,11 +12,11 @@ Set one plugin option from the plugin's configuration in `/plugin` (or `claude p
 
 - `url`: your server's origin, such as `http://192.168.0.10:8188`. Plain `http` is accepted, since the server is on your local network; ComfyUI has no authentication of its own, and this plugin sends none.
 
-Without it the tools answer with an error that says where to set it. Requires ComfyUI 0.3 or later for the core tools and ComfyUI-Manager 4 or later for the `manager_*` ones (older Managers answer 404 and the tools say so).
+Without it the tools answer with an error that says where to set it. Requires ComfyUI 0.3 or later for the core tools and ComfyUI-Manager 4 or later for `manager_packs` and `manager_task` (a 404 from the Manager, missing or older, is reported as such). `manager_search_packs` queries the public registry and needs no Manager.
 
 ## Use
 
-Slash commands, each a thin recipe over the tools: `/comfyui-local:generate-image`, `generate-video`, `generate-audio`, `generate-3d`, `upscale-image`, `remove-background`, `search-models`, `search-nodes`, `search-templates` and `help`. They never hard-code a model or node: they find what your server has at run time.
+Slash commands, each a thin recipe over the tools: `/comfyui-local:generate-image`, `generate-video`, `generate-audio`, `generate-3d`, `upscale-image`, `remove-background`, `search-models`, `search-nodes`, `search-templates` and `help`. They do not hard-code a model: they find what your server has at run time. Core node class names appear only as the usual starting point, and each node's inputs come from `search_nodes`.
 
 Tools (`mcp__comfyui-local__<name>`):
 
@@ -27,9 +27,9 @@ Tools (`mcp__comfyui-local__<name>`):
 - `submit_workflow`: queues an API-format prompt (node id to `class_type` and `inputs`) and answers the `prompt_id`, or the server's validation errors per node.
 - `get_job_status`: pending (with its place), running, completed (with its output files) or failed (with the node error); without a `prompt_id`, the queue.
 - `cancel_job`: removes a pending job, interrupts a running one, or clears the queue.
-- `upload_file`: sends a local image, video or audio file to the server's input folder and answers the name a LoadImage node takes.
+- `upload_file`: sends a local image, video or audio file to the server's input folder (or a `subfolder` of it) and answers the name a LoadImage node takes; `overwrite` replaces a file of the same name instead of renaming the upload.
 - `get_output`: downloads a finished job's files into `comfyui-outputs/` (or `directory`) named after `description`, and answers the paths.
-- `manager_packs`, `manager_search_packs`, `manager_task`: the packs installed through ComfyUI-Manager with version, state and the recent task results, a search of the public [Comfy Registry](https://registry.comfy.org) for packs to install, and one queued task (install by registry id; update, uninstall, disable, enable or fix an installed pack by its folder or registry id). The result is reported when the task is quick, else `manager_packs` shows it; a task the Manager's security level forbids fails there. ComfyUI must be restarted afterwards for the nodes to change; the plugin does not restart it.
+- `manager_packs`, `manager_search_packs`, `manager_task`: the packs installed through ComfyUI-Manager with version, state and the recent task results, a search of the public [Comfy Registry](https://registry.comfy.org) for packs to install, and one queued task (install by registry id; update, uninstall, disable, enable or fix an installed pack by its folder or registry id). The result is reported when the task is quick, else `manager_packs` shows it; a quick task that fails, such as one the Manager's security level forbids, is reported as an error. ComfyUI must be restarted afterwards for the nodes to change; the plugin does not restart it.
 
 Uploads and downloads go through `curl` on your machine, since the plugin API carries text only: `upload_file` and `get_output` need `curl` on the PATH (macOS and most Linux distributions ship it; Windows 10 and later too). The other tools do not. Long answers are cut at 60,000 characters; use the filters and `limit`.
 

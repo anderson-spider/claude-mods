@@ -29,13 +29,13 @@ selected: plugins/file-explorer/hooks/register.tsx
 j: ↓ k: ↑ h: ← l: → o: open s: find a: @ref r: ↻
 ```
 
-- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed. Outside a repository there is no branch line. Above it, right-aligned on a row of their own, buttons: `up` opens the folder above (pinned, as `/file-explorer <folder>`; `/file-explorer <folder>` goes back), `last file` opens the tree to the last file Claude touched, `collapse` closes every folder, and `dotfiles` shows or hides them (drawn full while shown). The pane's frame has its own close control. A pane too narrow for them leaves them out.
-- **Rows**: folders first, then files, sorted by name (or extension, or newest first). Dotfiles are hidden until you press `.`. Folders named in the ignore list (`node_modules`, `dist`, `.venv`...) are drawn dim and left out of search.
+- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed (or `clean`). Outside a repository, or with `git: off`, there is no branch line. Above it, right-aligned on a row of their own, buttons: `up` moves the tree to the folder above and pins it, as `/file-explorer <folder>` does (at the top of the file system it says so), `last file` opens the tree to the last file Claude touched other than by removing it, `collapse` closes every folder, and `dotfiles` shows or hides them (drawn full while shown). The pane's frame has its own close control. A pane too narrow for them leaves them out.
+- **Rows**: folders first, then files, sorted by name (or extension, or newest first). Dotfiles are hidden until you press `.`. Entries named in the ignore list (`node_modules`, `dist`, `.venv`...) are drawn dim and left out of search.
 - **Modified**: at the right edge of each file, how long ago it was modified: `now`, `3m`, `2h`, `yesterday`, `4d`, `3w`, `5mo`, `2y` (yesterday is 24 to 48 hours ago). In a narrow pane it goes before the git columns do; `mtime: false` hides it.
 - **Git**: a file shows its letter (`M` modified, `A` added, `D` deleted, `R` renamed, `?` untracked, `U` conflicted) and, for tracked changes, `+added -removed`. A folder shows how many changed files lie under it, in the colour of the strongest change.
-- **Claude's activity**: a dot in the first column, coloured by what Claude did: read, found by Grep or Glob, edited, created, removed, or part of the commit it just made. For about 2.7 seconds after each touch a light runs across the name in that colour, and the dot stays for two minutes. A Write, Edit, MultiEdit or NotebookEdit shows already while it runs: the file carries the edited dot and shimmers, and the tree opens to it when following. With the fixed `dark` and `light` themes the light is a gradient of the colour; with `auto`, whose colours a mod cannot read, it goes from dim to bold in the one colour. A collapsed folder with a touched file somewhere inside shows a dim `•`. The last two touches are listed in the footer.
+- **Claude's activity**: a dot in the first column, coloured by what Claude did: read, found by Grep or Glob, edited, created, removed, or part of the commit it just made. For about 2.7 seconds after each touch a light runs across the name in that colour, and the dot stays for two minutes. A Write, Edit, MultiEdit or NotebookEdit shows already while it runs: the file carries the edited dot and shimmers, and the tree opens to it when following. With the fixed `dark` and `light` themes the light is a gradient of the colour; with `auto`, whose colours a mod cannot read, it goes from dim to bold in the one colour. A collapsed folder with a touched file somewhere inside shows a dim `•`. The last two touches from the past hour are listed in the footer.
 - **Selected**: the row the keys act on has a soft background, and the line under the tree names it (`selected: path`).
-- **Follow**: when Claude reads, edits or creates a file, the tree opens down to it and the cursor moves there. Searches do not move the tree.
+- **Follow**: when Claude reads, edits or creates a file, the tree opens down to it and the cursor moves there, unless a preview or a search is open. Searches do not move the tree.
 
 ## Open it
 
@@ -44,7 +44,7 @@ In the terminal, the pane docks beside the transcript in the fullscreen layout (
 | Command | Does |
 | --- | --- |
 | `/file-explorer` | Opens the pane and gives it the keyboard. |
-| `/file-explorer <folder>` | Pins the tree to that folder; a `cd` no longer moves it. |
+| `/file-explorer <folder>` | Pins the tree to that folder; a `cd` no longer moves it. A relative folder is read from the tree's current root, and a path that is not a folder is refused with a note. |
 | `/file-explorer refresh` | Reads the shown folders and git again. |
 | `/file-explorer hidden` | Shows or hides dotfiles. |
 | `/file-explorer close` | Closes the pane. |
@@ -59,31 +59,33 @@ Click a row once to give the tree the keyboard, or open the pane with `/file-exp
 | `l` / `→` | Open a folder (on an open one, go to its first row) |
 | `h` / `←` | Close a folder, or go to the folder above |
 | `Enter` / `o` | Open or close a folder; preview a file (or open it in the editor, see `enterAction`) |
-| `Space` | Preview a file |
+| `Space` | Preview a file (on a folder, opens or closes it) |
 | `e` | Open the file in the editor |
 | `a` | Put `@path` at the prompt's cursor |
 | `y` | Copy the relative path |
 | `/` (or `s` in the footer) | Search |
 | `.` | Show or hide dotfiles |
 | `r` | Refresh |
-| `g` / `G`, `PgUp` / `PgDn` | First or last row, a page up or down |
+| `g` / `G`, `Home` / `End`, `PgUp` / `PgDn` | First or last row, a page up or down |
 | `q` | Back from a preview or a search |
 
-With the mouse: a click selects a row and opens or closes a folder, a double click opens a file, and the wheel scrolls the tree. The footer buttons (`j: ↓`, `o: open`...) are the same keys and work whenever the pane holds the keyboard.
+In a preview, `h` or `←` also goes back. Keys held with Ctrl or Meta do nothing.
+
+With the mouse: a click selects a row and opens or closes a folder, a double click previews a file (or opens it in the editor, see `enterAction`), and the wheel scrolls the tree. In the search list a click picks a hit and a double click reveals it. The footer buttons (`j: ↓`, `o: open`...) press the same keys when clicked.
 
 ## Search
 
-`/` (or `s`) moves to the search field. Results update as you type and cover every file of the project, including folders you never opened: in a git repository from `git ls-files` (tracked and untracked files, `.gitignore` honoured); elsewhere from a walk eight folders deep that skips ignored names and links. The index is built the first time you search and dropped when files are created or removed. Matching is fuzzy by default (the letters in order); `search: substring` needs them together. Enter in the field opens the tree at the best hit; on a hit in the list, Enter or `l` does the same.
+`/` (or `s`) moves to the search field. Results update as you type and cover every file of the project, including folders you never opened: in a git repository from `git ls-files` (tracked and untracked files, `.gitignore` honoured); elsewhere from a walk eight folders deep that skips ignored names and links. The index is built when you open the search and dropped when Claude creates or removes a file, when a shown folder changes on disk, and on refresh. It holds at most 50,000 paths, the list at most 200 hits, and hidden paths are found only while dotfiles are shown. Matching is fuzzy by default (the letters in order); `search: substring` needs them together. Enter in the field opens the tree at the best hit; on a hit in the list, Enter or `l` does the same.
 
 ## Preview and editor
 
 Space (or Enter, by default) previews a file in the pane: Markdown is drawn, code is highlighted, the arrows scroll, `q` goes back and `e` opens it in the editor. Files over 512 KB and binary files are not previewed, and a preview stops at 2,000 lines.
 
-`e` runs the `editor` command without a shell, so a file name is one argument to the program: `{path}`, `{dir}` and `{line}` are filled in, and the path is appended when the command names none (`code -g {path}:{line}`, `zed`, `subl`, `idea`). A command whose program reads its arguments as a command line (a shell such as `sh -c`, `tmux`, `ssh`, `env`, `cmd`, `powershell`) is refused, because a crafted file name would run as code there. With no command set, the system's default app opens the file (`open` on macOS, `xdg-open` on Linux, `explorer` on Windows), except files that app would run rather than show (`.app`, `.command`, `.jar`, `.exe`, `.bat`, `.desktop` and the like). A terminal editor such as `vim` cannot run this way: there is no terminal to draw in.
+`e` runs the `editor` command without a shell, so a file name is one argument to the program: `{path}`, `{dir}` and `{line}` are filled in (`{line}` is always 1), and the path is appended when the command names none (`code -g {path}:{line}`, `zed`, `subl`, `idea`). A command whose program reads its arguments as a command line (a shell such as `sh -c`, `tmux`, `ssh`, `env`, `cmd`, `powershell`) is refused, because a crafted file name would run as code there. With no command set, the system's default app opens the file (`open` on macOS, `xdg-open` on Linux, `explorer` on Windows), except files that app would run rather than show (`.app`, `.command`, `.jar`, `.exe`, `.bat`, `.desktop` and the like). A terminal editor such as `vim` cannot run this way: there is no terminal to draw in.
 
 ## Context for Claude
 
-The explorer never adds anything to Claude's context by itself. `a` writes `@path` (quoted when it holds a space) at the prompt's cursor, unless the draft already has it, and Claude Code attaches the file when you send the prompt, as with a mention you type. When you mention a file with `@path` yourself, the tree opens to it. Nothing of a file is read for the prompt, and the preview's text stays in the pane.
+The explorer never adds anything to Claude's context by itself. `a` writes `@path` (quoted when it holds a space or a double quote) at the prompt's cursor, unless the draft already has it, and Claude Code attaches the file when you send the prompt, as with a mention you type. When you mention a file with `@path` yourself, the tree opens to it, whatever `follow` is set to, unless a preview is open. Nothing of a file is read for the prompt, and the preview's text stays in the pane.
 
 ## Settings
 
@@ -117,7 +119,7 @@ Change them in `/config` (they appear under the plugin) or in `settings.json`:
 | Option | Default | Values |
 | --- | --- | --- |
 | `autoOpen` | `true` | Open the pane at session start (where the terminal has room). |
-| `follow` | `true` | Open the tree to the files Claude reads, edits and creates. |
+| `follow` | `true` | Open the tree to the files Claude reads, edits and creates. An `@path` mention reveals its file either way. |
 | `animations` | `true` | Shimmer a touched name for a moment, and one being written while it runs; `false` keeps only the dot. |
 | `showHidden` | `false` | Start with dotfiles shown. |
 | `mtime` | `true` | Show how long ago each file was modified. |
@@ -129,16 +131,16 @@ Change them in `/config` (they appear under the plugin) or in `settings.json`:
 | `theme` | `auto` | `auto` follows the Claude Code theme; `dark` and `light` are fixed palettes. |
 | `git` | `full` | `full` (letters and lines), `status` (letters only) or `off`. |
 | `search` | `fuzzy` | `fuzzy` or `substring`. |
-| `refreshSeconds` | `5` | While the pane is open, how often the shown folders are checked for changes made outside Claude; `0` turns it off. |
+| `refreshSeconds` | `5` | While the pane is open, how often the shown folders are checked for changes made outside Claude; `0` turns it off, and other values are held between 2 and 600. |
 
-A value outside its choices reads as the default.
+A value of the wrong kind, or outside its choices, reads as the default.
 
 ## How it stays light
 
-- It is local code, not an agent: it makes no model call, adds nothing to the conversation and sends nothing anywhere.
+- It is local code, not an agent: it makes no model call, adds nothing to the conversation, writes no file of its own and sends nothing anywhere.
 - Only the root and the folders you open are listed, at most 2,000 entries each (a `… N more` row stands for the rest), and the tree draws only the rows in view.
 - After each finished tool call it reads the call's input and result. A call that may change files (Write, Edit, MultiEdit, NotebookEdit, Bash) also re-reads the shown folders whose modification time moved, then runs git once, 300 ms after the last change. Refused or failed calls are ignored.
-- Git runs by argument list with no shell: `status --porcelain` and, in `full` mode, `diff --numstat HEAD`. It runs with `--no-optional-locks`, so it never holds `.git/index.lock` against Claude's own `git add` or `commit`, and with `core.fsmonitor` off and no external diff or textconv, so a repository's config cannot make it run a command. It runs again when `.git/index` or `.git/HEAD` changes (Claude Code's file watcher), so a commit or checkout made in another terminal shows too.
+- Git runs by argument list with no shell: `rev-parse` once per root, `status` each time it runs, `diff --numstat HEAD` in `full` mode, `ls-files` to build the search index, and `show HEAD` only after a commit. It runs with `--no-optional-locks`, so it never holds `.git/index.lock` against Claude's own `git add` or `commit`, with `core.fsmonitor` off, and `diff` and `show` get no external diff or textconv, so a repository's config cannot make it run a command. It runs again when `.git/index` or `.git/HEAD` changes (Claude Code's file watcher), so a commit or checkout made in another terminal shows too.
 - Changes made outside Claude to files in open folders are picked up by a check of those folders' modification times every `refreshSeconds` while the pane is open. Claude Code gives a mod no folder watcher, and this is the cheapest check that works on every platform.
 - The shimmer runs in the rows' own drawing module on the surface's frame clock, and draws a frame only while a row shimmers; no hook runs per frame. The modified ages are drawn again once a minute while the pane is open.
 - Timers stop when the session ends; a `/clear` keeps them, since the process goes on.
@@ -147,7 +149,7 @@ Measured by `tests/performance.test.ts` on a development laptop: about 13 ms to 
 
 ## Limits
 
-- **Where it draws**: the terminal in the fullscreen layout, and the desktop app. In VS Code and on mobile, Claude Code draws no keyboard-driven region for a mod: the rows are plain text there, and the footer buttons move the cursor.
+- **Where it draws**: the terminal in the fullscreen layout, and the desktop app. In VS Code and on mobile, Claude Code draws no keyboard-driven region for a mod: the rows are plain text there, the footer buttons move the cursor, and the search field is drawn only on the terminal and the desktop app.
 - **Managed settings**: where an organization manages Claude Code, the events for git's own files and for `cd` (`SessionStart`, `FileChanged`, `CwdChanged`) only reach plugins the organization lists. The tree and git still update after Claude's tool calls and on `r`, but a commit made in another terminal shows only after the next refresh, and a `cd` does not move the tree.
 - **Shell commands**: a Bash command's effects are read from its words (`rm`, `mv`, `cp`, `touch`, `mkdir`, `git commit`), so a script that writes files is seen only through the folder refresh and git, not as a mark.
 - **Windows**: paths with a drive letter are handled and the default opener is `explorer`, but the mod has not been run on Windows.

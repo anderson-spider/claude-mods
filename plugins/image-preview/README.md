@@ -33,13 +33,13 @@ When Claude opens an image with the `Read` tool, a thumbnail is drawn under that
 
 ## How it works
 
-Claude Code saves every pasted image as `<tmp>/<project>/<session>/images/<n>.<ext>` and puts an `[Image #n]` tag in the prompt.
+Claude Code saves every pasted image as `<tmp>/claude-<uid>/<project>/<session>/images/<n>.<ext>` and puts an `[Image #n]` tag in the prompt. `<tmp>` is `CLAUDE_CODE_TMPDIR` when set, else `/tmp`, and the mod finds the session's folder under `<tmp>/claude-<uid>` by the session id. On Windows that folder is `claude` under `<tmp>`, with `%TEMP%` as `<tmp>` when `CLAUDE_CODE_TMPDIR` is unset.
 
 1. Every 200 ms the mod reads the prompt and looks for `[Image #n]` tags; pasting raises no edit event.
-2. For each tag it finds the cached file. The terminal draws PNG only, so on macOS any other format is converted once with `sips` to `<session>/image-preview-<n>.png`. The size comes from the PNG header.
+2. For each tag it finds the cached file. The terminal draws PNG only, so on macOS any other format is converted once with `sips` to `<session>/image-preview-<n>.png`, at most 800 pixels on its longest side. The size comes from the PNG header.
 3. Where Claude Code draws real pictures it uses Claude Code's `Image` element, and the terminal reads the file itself.
-4. Anywhere else the mod decodes the PNG, averages it down and draws it in colored half blocks (`▀`) with the `Raster` element.
-5. For a `Read` of an image file it redraws the tool's row with the picture under it. On macOS a thumbnail is made once per read with `sips` as `<tmp>/image-preview-read-<session>-<call>.png`, at most 480 pixels on its longest side; without `sips` a PNG is drawn from the file itself and other formats are not drawn.
+4. Anywhere else the mod decodes the PNG, averages it down to at most 96 pixels on its longest side and draws it in colored half blocks (`▀`) with the `Raster` element. A PNG the decoder cannot read (interlaced, or past the 4 MiB read limit) gets no blocks: a paste tile falls back to the picture element, and a read image gets no thumbnail.
+5. For a `Read` of an image file it redraws the tool's row with the picture under it. On macOS a thumbnail is made once per read with `sips` as `<tmp>/claude-<uid>/image-preview-read-<session>-<call>.png`, at most 480 pixels on its longest side; without `sips` a PNG is drawn from the file itself and other formats are not drawn.
 
 ## Terminal support
 
@@ -59,7 +59,7 @@ Herdr with `kitty_graphics` turned on draws real pictures, but Claude Code does 
 
 ## What it reads, runs and writes
 
-Local only, no network requests. It reads the prompt box, lists Claude Code's temp folder to find the session's image cache, and reads each pasted image (up to Claude Code's 4 MiB read limit). For each image Claude reads it reads that file and, on macOS, writes one small PNG thumbnail into Claude Code's temp folder. It runs `id -u` once on macOS and Linux to find that folder, `sips` for a non-PNG paste and for each read image on macOS, and `open` (`xdg-open` on Linux) when you click a read image's file name. It reads a few terminal variables (`TERM`, `TERM_PROGRAM`, `TMUX`, `GHOSTTY_RESOURCES_DIR` and similar) to choose the thumbnail kind. `claude plugin validate plugins/image-preview` lists every event it hooks and call it makes.
+Local only, no network requests. It reads the prompt box, lists Claude Code's temp folder to find the session's image cache, and reads each pasted image; a paste past the 4 MiB read limit is still shown, without its aspect ratio. For each image Claude reads it reads that file and, on macOS, writes one small PNG thumbnail into Claude Code's temp folder. It runs `id -u` once on macOS and Linux to find that folder, `sips` for a non-PNG paste and for each read image on macOS, and `open`, or `xdg-open` when `open` fails, when you click a read image's file name. It reads terminal variables (`TERM`, `TERM_PROGRAM`, `TMUX`, `STY`, `KITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR`, `CLAUDE_CODE_SESSION_KIND` and the `CLAUDE_CODE_FORCE_TERMINAL_IMAGES` and `CLAUDE_IMAGE_PREVIEW_RENDERER` overrides) to choose the thumbnail kind, and `CLAUDE_CODE_TMPDIR`, `OS` and `TEMP` to find Claude Code's temp folder. `claude plugin validate plugins/image-preview` lists every event it hooks and every call it makes.
 
 ## Requirements
 

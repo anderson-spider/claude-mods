@@ -2,7 +2,7 @@
 
 Control native Mac apps through Codex computer use, bundled with the ChatGPT desktop app. Claude chooses the task; Codex clicks/types in the background without taking over your mouse.
 
-It has two parts: the plugin, installed in Claude Code, and a local helper (a per-user LaunchAgent) that talks to Codex. The plugin does nothing until the helper is installed.
+It has two parts: the plugin, installed in Claude Code, and a local helper (a per-user LaunchAgent) that talks to Codex. Until the helper is installed, bridge calls cannot reach Codex, while the route (on by default) still blocks Claude's own desktop tools.
 
 ## Requirements
 
@@ -53,9 +53,9 @@ To remove it, run `~/.claude/mcp/codex-cu/uninstall.sh`: it unloads the LaunchAg
 /codex-cu auto-approve on | off
 ```
 
-While on, native desktop control uses `mcp__codex-computer-use__codex_cu`; Claude's desktop tools are blocked. Browsers, CLIs and purpose-built tools remain available. The bridge returns its current API documentation on the first entry call: Claude reads that before further actions.
+While on, native desktop control uses `mcp__codex-computer-use__codex_cu`; Claude's desktop tools are blocked. Browsers, CLIs and purpose-built tools remain available. A new or reset Codex session must start with one documented entry call on its own, such as `cua.getState()` or `cua.getApp(...)`; Claude reads the documentation that call returns before further actions.
 
-New apps ask in a band: **This session**, **Always** or **No**. Auto-approve defaults off; organization/safety blocks remain in force when it is on. A refusal is final for that caller. Questions expire five minutes from before entering the queue, including queue time; failures/timeouts do not approve. `forget` clears this session's answers; `forget <app>` removes always-allow in both the helper and Codex.
+New apps ask in a band: **This session**, **Always** or **No**. Auto-approve defaults off; organization/safety blocks remain in force when it is on. A refusal is final for that caller. Questions expire five minutes from before entering the queue, including queue time; failures/timeouts do not approve. `forget` ends this session's Codex sessions and drops its app answers; `forget <app>` removes always-allow in both the helper and Codex.
 
 Each Claude session/subagent gets a persistent Codex session. App ownership lasts two minutes after its last use, and `/codex-cu status` lists only apps still held. Literal `cua.getApp(...)` names are checked before calls; an app reached through a variable is owned only after its first reported result. Read and act in one call to avoid Codex's stale-state refusal. These ownership checks are not an isolation sandbox.
 
