@@ -41,11 +41,12 @@ function limitOf(value: unknown): number {
   return Math.min(Math.max(n, 1), MAX_LIMIT)
 }
 
-/** Whether `text` holds every word of `query`, case-insensitively. */
-function matches(query: string | undefined, text: string): boolean {
+/** Whether `text` holds every word of `query` (or any word, with `any`), case-insensitively. */
+function matches(query: string | undefined, text: string, any = false): boolean {
   if (!query) return true
   const hay = text.toLowerCase()
-  return query.toLowerCase().split(/\s+/).filter(Boolean).every((word) => hay.includes(word))
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return any ? words.some((word) => hay.includes(word)) : words.every((word) => hay.includes(word))
 }
 
 /** Reads `path` on the server as JSON; a network failure or a non-JSON body is an `Out` error. */
@@ -184,15 +185,21 @@ export async function searchNodes(fetch: Fetch, base: string, input: SearchNodes
   const limit = limitOf(input.limit)
   const found: NodeSummary[] = []
   let total = 0
-  for (const [name, info] of Object.entries(all)) {
-    const node = isObject(info) ? info : {}
-    if (category && !String(node.category ?? '').toLowerCase().includes(category)) continue
-    if (pack && !packOf(node.python_module).toLowerCase().includes(pack)) continue
-    if (inType && !inputTypes(info).some((t) => t.toUpperCase() === inType)) continue
-    if (outType && !(Array.isArray(node.output) ? node.output : []).some((t) => String(t).toUpperCase() === outType)) continue
-    if (!matches(query, `${name} ${String(node.display_name ?? '')} ${String(node.description ?? '')} ${String(node.category ?? '')} ${Array.isArray(node.search_aliases) ? node.search_aliases.join(' ') : ''}`)) continue
-    total++
-    if (found.length < limit) found.push(summarizeNode(name, info))
+  // Every word first; when nothing holds them all (several node names in one query), any word.
+  let any = false
+  for (const pass of [false, true]) {
+    any = pass
+    for (const [name, info] of Object.entries(all)) {
+      const node = isObject(info) ? info : {}
+      if (category && !String(node.category ?? '').toLowerCase().includes(category)) continue
+      if (pack && !packOf(node.python_module).toLowerCase().includes(pack)) continue
+      if (inType && !inputTypes(info).some((t) => t.toUpperCase() === inType)) continue
+      if (outType && !(Array.isArray(node.output) ? node.output : []).some((t) => String(t).toUpperCase() === outType)) continue
+      if (!matches(query, `${name} ${String(node.display_name ?? '')} ${String(node.description ?? '')} ${String(node.category ?? '')} ${Array.isArray(node.search_aliases) ? node.search_aliases.join(' ') : ''}`, any)) continue
+      total++
+      if (found.length < limit) found.push(summarizeNode(name, info))
+    }
+    if (total > 0 || !query || query.trim().split(/\s+/).length < 2) break
   }
   if (total === 0) return ok(`No node matches (${Object.keys(all).length} nodes on the server). Try fewer words or another filter.`)
   const lines = found.map((n) =>
@@ -200,7 +207,7 @@ export async function searchNodes(fetch: Fetch, base: string, input: SearchNodes
       .filter(Boolean)
       .join('\n'),
   )
-  return ok(`${total} node${total === 1 ? '' : 's'} ${total === 1 ? 'matches' : 'match'}${total > found.length ? `, showing ${found.length} (raise limit or narrow the query)` : ''}.\n\n${lines.join('\n\n')}`)
+  return ok(`${total} node${total === 1 ? '' : 's'} ${total === 1 ? 'matches' : 'match'}${any ? ' at least one word' : ''}${total > found.length ? `, showing ${found.length} (raise limit or narrow the query)` : ''}.\n\n${lines.join('\n\n')}`)
 }
 
 // --- models -----------------------------------------------------------------------------------------------------------

@@ -115,6 +115,8 @@ test('searchNodes filters by words, category, pack, input and output types, and 
   expect((await searchNodes(fetch, BASE, { query: 'nothing here' })).text).toContain('No node matches (2 nodes on the server)')
   const capped = await searchNodes(fetch, BASE, { limit: 1 })
   expect(capped.text).toContain('2 nodes match, showing 1')
+  const several = await searchNodes(fetch, BASE, { query: 'KSampler Blend' })
+  expect(several.text).toContain('2 nodes match at least one word')
 })
 
 test('searchModels lists folder/file across folders or in one, and names the folders when nothing matches', async () => {
