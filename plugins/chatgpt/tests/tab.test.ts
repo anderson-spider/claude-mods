@@ -85,11 +85,12 @@ test('findTab leaves a listed tab that is on another site where it is and opens 
   expect(waits).toEqual([['t2', `!!${COMPOSER} || ${LOGIN}`, LOAD_MS]])
 })
 
-test('the leave script moves only a tab on chatgpt.com or openai.com', () => {
+test("the leave script moves only a tab on chatgpt.com or OpenAI's sign-in pages", () => {
   const guard = /if \(!(\/.*\/)\.test\(location\.hostname\)\)/.exec(leaveScript(TARGET))?.[1]
   const sites = new RegExp(String(guard).slice(1, -1))
-  expect(['chatgpt.com', 'auth.openai.com', 'openai.com'].every(host => sites.test(host))).toBe(true)
-  expect(['example.com', 'notchatgpt.com', 'chatgpt.com.evil.example', 'mail.google.com'].some(host => sites.test(host))).toBe(false)
+  expect(['chatgpt.com', 'cdn.chatgpt.com', 'auth.openai.com', 'auth0.openai.com'].every(host => sites.test(host))).toBe(true)
+  const others = ['example.com', 'notchatgpt.com', 'chatgpt.com.evil.example', 'openai.com', 'platform.openai.com', 'help.openai.com', '']
+  expect(others.some(host => sites.test(host))).toBe(false)
 })
 
 test('prepare answers an invalid chatUrl before the browser is touched', async () => {
