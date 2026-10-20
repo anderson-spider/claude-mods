@@ -6,8 +6,12 @@ import {
   getJobStatus,
   getOutput,
   getTemplate,
+  getWorkflow,
+  listWorkflows,
   managerPacks,
+  restartServer,
   runManagerTask,
+  saveWorkflow,
   searchModels,
   searchNodes,
   searchPacks,
@@ -15,6 +19,7 @@ import {
   submitWorkflow,
   systemInfo,
   uploadFile,
+  type Clock,
   type Fetch,
   type Out,
   type Run,
@@ -39,8 +44,8 @@ function accessIo($: EngineInterface): AccessIo {
   }
 }
 
-/** What a tool does once the server is known: the fetch, the process runner and the file check are the host's, wrapped so the engine's source analysis sees each `$` call. */
-type Work = (host: { fetch: Fetch; run: Run; exists: (path: string) => Promise<boolean>; base: string }) => Promise<Out>
+/** What a tool does once the server is known: the fetch, the process runner, the file check and the clock are the host's, wrapped so the engine's source analysis sees each `$` call. */
+type Work = (host: { fetch: Fetch; run: Run; exists: (path: string) => Promise<boolean>; clock: Clock; base: string }) => Promise<Out>
 
 /** The host wiring every tool shares: resolves the server from the url option, then runs the tool. `$` is passed only to this top-level function. */
 async function run($: EngineInterface, options: { url?: unknown }, work: Work): Promise<Reply> {
@@ -52,12 +57,20 @@ async function run($: EngineInterface, options: { url?: unknown }, work: Work): 
       fetch: (url, init) => $.http.fetch(url, init),
       run: (argv, init) => $.process.run(argv, init),
       exists: (path) => $.fs.exists(path),
+      // A wait inside a `$` call does not use up the hook's time; `$.clock.sleep` would. Windows has no sleep command.
+      clock: {
+        sleep: async (ms) => {
+          await $.process.run(['sleep', String(ms / 1000)]).catch(() => $.process.run(['powershell', '-NoProfile', '-Command', `Start-Sleep -Milliseconds ${ms}`]))
+        },
+        now: () => $.clock.now(),
+      },
     }),
   )
 }
 
 const LIMIT = { type: 'number', description: 'Results to show (default 20, at most 200).' } as const
 const PROMPT_ID = 'The prompt_id that submit_workflow answered.'
+const WORKFLOW_PATH = 'The workflow path relative to workflows/, subfolders allowed, such as "02 Pixel Art/Isometric building"; .json is added when missing.'
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
@@ -194,7 +207,7 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'manager_task',
       description:
-        'Queue a ComfyUI-Manager task on a node pack: install (a registry id from manager_search_packs), or update, uninstall, disable, enable or fix an installed pack (a folder or registry id from manager_packs). ComfyUI must be restarted afterwards for the nodes to change.',
+        'Queue a ComfyUI-Manager task on a node pack: install (a registry id from manager_search_packs), or update, uninstall, disable, enable or fix an installed pack (a folder or registry id from manager_packs). ComfyUI must be restarted afterwards (restart_server) for the nodes to change.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -205,6 +218,43 @@ export const register: Register = (on, options) => {
         },
         required: ['action', 'pack'],
       } satisfies SchemaFor<Inputs['mcp__comfyui-local__manager_task']>,
+    })
+    await $.tool.register({
+      name: 'restart_server',
+      description:
+        'Restart ComfyUI through ComfyUI-Manager to load node packs that manager_task installed, updated or removed, and wait until it answers again (up to 2 minutes). Refuses while a job runs or waits, since a restart kills it. Answers the time it took, the version and the packs that failed to import.',
+      inputSchema: {
+        type: 'object',
+        properties: { force: { type: 'boolean', description: 'Restart even with jobs in the queue: the running one is killed and the pending ones are dropped.' } },
+      } satisfies SchemaFor<Inputs['mcp__comfyui-local__restart_server']>,
+    })
+    await $.tool.register({
+      name: 'save_workflow',
+      description:
+        "Save a UI-format workflow (nodes and links arrays, as the frontend saves it) to the user's workflow library, so it shows in the Workflows tab. Never an API-format prompt: that breaks the frontend's list; run those with submit_workflow. Refuses to replace an existing file unless overwrite.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: WORKFLOW_PATH },
+          workflow: { description: 'The UI-format workflow as a JSON object, or that JSON as a string.' },
+          overwrite: { type: 'boolean', description: 'Replace a workflow saved at the same path (default false).' },
+        },
+        required: ['path', 'workflow'],
+      } satisfies SchemaFor<Inputs['mcp__comfyui-local__save_workflow']>,
+    })
+    await $.tool.register({
+      name: 'list_workflows',
+      description: "List the workflows saved in the user's library (the frontend's Workflows tab) with size and date. Check it before save_workflow to know whether a path is taken.",
+      inputSchema: { type: 'object', properties: {} } satisfies SchemaFor<Inputs['mcp__comfyui-local__list_workflows']>,
+    })
+    await $.tool.register({
+      name: 'get_workflow',
+      description: "Read one saved workflow from the user's library as UI-format JSON, as the base to edit and save back with save_workflow and overwrite.",
+      inputSchema: {
+        type: 'object',
+        properties: { path: { type: 'string', description: WORKFLOW_PATH } },
+        required: ['path'],
+      } satisfies SchemaFor<Inputs['mcp__comfyui-local__get_workflow']>,
     })
     return next(e)
   })
@@ -222,4 +272,8 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__comfyui-local__manager_packs' }, async ($, e) => run($, options, (h) => managerPacks(h.fetch, h.base, e)))
   on('tool.call', { tool: 'mcp__comfyui-local__manager_search_packs' }, async ($, e) => run($, options, (h) => searchPacks(h.fetch, e)))
   on('tool.call', { tool: 'mcp__comfyui-local__manager_task' }, async ($, e) => run($, options, (h) => runManagerTask(h.fetch, h.base, e, `comfyui-local-${Date.now()}`)))
+  on('tool.call', { tool: 'mcp__comfyui-local__restart_server' }, async ($, e) => run($, options, (h) => restartServer(h.fetch, h.base, e, h.clock)))
+  on('tool.call', { tool: 'mcp__comfyui-local__save_workflow' }, async ($, e) => run($, options, (h) => saveWorkflow(h.fetch, h.base, e)))
+  on('tool.call', { tool: 'mcp__comfyui-local__list_workflows' }, async ($) => run($, options, (h) => listWorkflows(h.fetch, h.base)))
+  on('tool.call', { tool: 'mcp__comfyui-local__get_workflow' }, async ($, e) => run($, options, (h) => getWorkflow(h.fetch, h.base, e)))
 }

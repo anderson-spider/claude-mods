@@ -1,6 +1,6 @@
 # comfyui-local
 
-Generate images, video, audio and 3D on your own ComfyUI server, search the nodes, models and templates it has, run and fetch jobs, and manage custom node packs through ComfyUI-Manager. Everything runs on your server and GPU; nothing goes to Comfy Cloud.
+Generate images, video, audio and 3D on your own ComfyUI server, search the nodes, models and templates it has, run and fetch jobs, keep workflows in your library, and manage custom node packs through ComfyUI-Manager, restarting the server to load them. Everything runs on your server and GPU; nothing goes to Comfy Cloud.
 
 ```text
 /plugin install comfyui-local --marketplace anderson-spider/claude-mods
@@ -12,7 +12,7 @@ Set one plugin option from the plugin's configuration in `/plugin` (or `claude p
 
 - `url`: your server's origin, such as `http://192.168.0.10:8188`. Plain `http` is accepted, since the server is on your local network; ComfyUI has no authentication of its own, and this plugin sends none.
 
-Without it the tools answer with an error that says where to set it. Requires ComfyUI 0.3 or later for the core tools and ComfyUI-Manager 4 or later for `manager_packs` and `manager_task` (a 404 from the Manager, missing or older, is reported as such). `manager_search_packs` queries the public registry and needs no Manager.
+Without it the tools answer with an error that says where to set it. Requires ComfyUI 0.3 or later for the core tools and ComfyUI-Manager 4 or later for `manager_packs`, `manager_task` and `restart_server` (a 404 from the Manager, missing or older, is reported as such). `manager_search_packs` queries the public registry and needs no Manager.
 
 ## Use
 
@@ -29,11 +29,15 @@ Tools (`mcp__comfyui-local__<name>`):
 - `cancel_job`: removes a pending job, interrupts a running one, or clears the queue.
 - `upload_file`: sends a local image, video or audio file to the server's input folder (or a `subfolder` of it) and answers the name a LoadImage node takes; `overwrite` replaces a file of the same name instead of renaming the upload.
 - `get_output`: downloads a finished job's files into `comfyui-outputs/` (or `directory`) named after `description`, and answers the paths.
-- `manager_packs`, `manager_search_packs`, `manager_task`: the packs installed through ComfyUI-Manager with version, state and the recent task results, a search of the public [Comfy Registry](https://registry.comfy.org) for packs to install, and one queued task (install by registry id; update, uninstall, disable, enable or fix an installed pack by its folder or registry id). The result is reported when the task is quick, else `manager_packs` shows it; a quick task that fails, such as one the Manager's security level forbids, is reported as an error. ComfyUI must be restarted afterwards for the nodes to change; the plugin does not restart it.
+- `manager_packs`, `manager_search_packs`, `manager_task`: the packs installed through ComfyUI-Manager with version, state and the recent task results, a search of the public [Comfy Registry](https://registry.comfy.org) for packs to install, and one queued task (install by registry id; update, uninstall, disable, enable or fix an installed pack by its folder or registry id). The result is reported when the task is quick, else `manager_packs` shows it; a quick task that fails, such as one the Manager's security level forbids, is reported as an error. ComfyUI must be restarted afterwards for the nodes to change (`restart_server`).
+- `restart_server`: restarts ComfyUI through the Manager (`POST /v2/manager/reboot`), then polls `/system_stats` every 2 seconds for up to 2 minutes and answers how long it took, the ComfyUI version and the node packs that failed to import. It refuses while a job runs or waits, since a restart kills the running job and drops the pending ones, unless `force`. The Manager allows it only at `security_level` middle or above (`user/__manager/config.ini`); a 403 says so. The server comes back by itself when ComfyUI runs in the foreground or under a service manager such as systemd, since the Manager re-executes the process in place; under comfy-cli the Manager exits and leaves comfy-cli a marker to start it again.
+- `save_workflow`, `list_workflows`, `get_workflow`: the workflow library of the default user (`user/default/workflows/` on the server, the frontend's and the desktop app's Workflows tab) through `/api/userdata`. `save_workflow` takes a `path` relative to it (a leading `workflows/` is taken as that folder), subfolders allowed and `.json` added when missing, and a UI-format workflow (`nodes` and `links` arrays); it refuses `..`, absolute paths, `%`, colons and control characters in the path, and an API-format prompt, which inside `workflows/` breaks the frontend's list, and replaces an existing file only with `overwrite`. `list_workflows` answers each path with its size and date, and `get_workflow` one workflow's JSON as the base for an edit. Converting an API-format prompt to the UI format needs the frontend's graph layout and is not done here.
 
 Uploads and downloads go through `curl` on your machine, since the plugin API carries text only: `upload_file` and `get_output` need `curl` on the PATH (macOS and most Linux distributions ship it; Windows 10 and later too). The other tools do not. Long answers are cut at 60,000 characters; use the filters and `limit`.
 
-No tool asks for confirmation: the server is yours and local. To let Claude call them without prompts, allow `mcp__comfyui-local__*` in your permission rules; to approve each job, upload, download and Manager task yourself, allow only the ones that read: `system_info`, `search_nodes`, `search_models`, `search_templates`, `get_template`, `get_job_status`, `manager_packs` and `manager_search_packs`.
+No tool asks for confirmation: the server is yours and local. To let Claude call them without prompts, allow `mcp__comfyui-local__*` in your permission rules; to approve each job, upload, download and Manager task yourself, allow only the ones that read: `system_info`, `search_nodes`, `search_models`, `search_templates`, `get_template`, `get_job_status`, `manager_packs`, `manager_search_packs`, `list_workflows` and `get_workflow`.
+
+Node packs and Python dependencies: `manager_task` install lets the Manager install a pack's `requirements.txt`. It skips `torch`, `torchaudio`, `torchsde` and `torchvision` named there, but not what the other requirements pull in: a package that depends on torch can still replace the server's own build (a ROCm or CUDA torch, say), and `onnxruntime-gpu` installs over `onnxruntime`, which can break the server. Read a pack's requirements before installing it; for one that brings torch, torchvision or onnxruntime-gpu in, install the pack and its requirements on the server yourself, with pip constraints that pin the builds you have.
 
 ## Privacy
 

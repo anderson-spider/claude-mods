@@ -14,7 +14,7 @@ export const ON = { options: { url: URL_OPTION } }
 
 type Settings = Record<string, unknown>
 
-/** A host with a fake ComfyUI behind `http.fetch` (routes as "METHOD path"), curl behind `process.run`, files behind `fs.exists` and settings behind `settings.read`. */
+/** A host with a fake ComfyUI behind `http.fetch` (routes as "METHOD path"), curl behind `process.run`, files behind `fs.exists`, settings behind `settings.read` and a fixed `clock.now`. */
 export function world(on: On, opts: { routes?: Record<string, { status?: number; body: unknown }>; user?: Settings; project?: Settings; local?: Settings; files?: string[] } = {}) {
   const tools: Tool[] = []
   const sent: Sent[] = []
@@ -41,6 +41,7 @@ export function world(on: On, opts: { routes?: Record<string, { status?: number;
     return { value: { exitCode: 0, stdout: JSON.stringify({ name: 'up.png', subfolder: '', type: 'input' }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('fs.exists', (_$, e) => ({ value: (host.files ?? []).includes(e.path) }) as never)
+  on('clock.now', () => ({ value: 0 }) as never)
 
   return { tools, sent, processes, host }
 }

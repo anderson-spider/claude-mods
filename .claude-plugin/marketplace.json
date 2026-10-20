@@ -20,7 +20,7 @@
     {
       "name": "comfyui-local",
       "source": "./plugins/comfyui-local",
-      "description": "Generate images, video and audio and manage node packs on your self-hosted ComfyUI (and ComfyUI-Manager) through its HTTP API, using the url plugin option; unofficial, with slash commands ported from Comfy-Org/comfy-skills."
+      "description": "Generate images, video and audio, keep workflows in your library, and manage node packs and restart the server on your self-hosted ComfyUI (and ComfyUI-Manager) through its HTTP API, using the url plugin option; unofficial, with slash commands ported from Comfy-Org/comfy-skills."
     },
     {
       "name": "coolify",

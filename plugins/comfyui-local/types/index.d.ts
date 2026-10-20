@@ -63,5 +63,17 @@ declare module 'claude-code' {
       version?: string
       repository?: string
     }
+    'mcp__comfyui-local__restart_server': {
+      force?: boolean
+    }
+    'mcp__comfyui-local__save_workflow': {
+      path: string
+      workflow: unknown
+      overwrite?: boolean
+    }
+    'mcp__comfyui-local__list_workflows': {}
+    'mcp__comfyui-local__get_workflow': {
+      path: string
+    }
   }
 }
