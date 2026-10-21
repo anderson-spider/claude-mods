@@ -54,15 +54,15 @@ function matches(query: string | undefined, text: string, any = false): boolean 
   return any ? words.some((word) => hay.includes(word)) : words.every((word) => hay.includes(word))
 }
 
-/** Reads `path` on the server as JSON; a network failure or a non-JSON body is an `Out` error. */
-async function getJson(fetch: Fetch, base: string, path: string): Promise<{ value: unknown; error?: undefined } | { value?: undefined; error: Out }> {
+/** Reads `path` on the server as JSON; a network failure or a non-JSON body is an `Out` error, an error answer also carries its status. */
+async function getJson(fetch: Fetch, base: string, path: string): Promise<{ value: unknown; error?: undefined } | { value?: undefined; error: Out; status?: number }> {
   let res: FetchResponse
   try {
     res = await fetch(base + path)
   } catch (e) {
     return { error: fail(`Could not reach ${base === REGISTRY ? 'the Comfy Registry' : 'the ComfyUI server'} at ${base}: ${e instanceof Error ? e.message : String(e)}`) }
   }
-  if (!res.ok) return { error: fail(`GET ${path} answered ${res.status}: ${res.text.slice(0, 2000)}`) }
+  if (!res.ok) return { error: fail(`GET ${path} answered ${res.status}: ${res.text.slice(0, 2000)}`), status: res.status }
   try {
     return { value: JSON.parse(res.text) }
   } catch {
@@ -729,10 +729,12 @@ export async function runManagerTask(fetch: Fetch, base: string, input: ManagerT
 /**
  * How restart_server waits for the server to come back: one GET /system_stats every `RESTART_POLL_MS`, for
  * `RESTART_TIMEOUT_MS` at most; after a dropped connection the first comes at `RESTART_FIRST_POLL_MS`, while the
- * re-executed process is surely still down.
+ * re-executed process is surely still down. A server that still answers `RESTART_STILL_UP_MS` after the reboot was sent
+ * never restarted; before that, an answer may come from the old process while it shuts down.
  */
 export const RESTART_FIRST_POLL_MS = 500
 export const RESTART_POLL_MS = 2_000
+export const RESTART_STILL_UP_MS = 10_000
 export const RESTART_TIMEOUT_MS = 120_000
 
 /** The clock restart_server waits on, injected so a test runs at once. */
@@ -774,7 +776,8 @@ export async function restartServer(fetch: Fetch, base: string, input: RestartIn
   // Sent as JSON: the Manager answers 400 to the content types a plain HTML form can post (its CSRF guard).
   const sent = await postJson(fetch, base, '/v2/manager/reboot', {})
   // A dropped connection, an empty answer or a proxy's gateway error may each be the restart beginning; only a poll
-  // that finds the server down proves it, so an answer before that comes from a process that never restarted.
+  // that finds the server down proves it, so an answer before that comes from the old process, still shutting down or
+  // never restarting.
   const gateway = sent.res !== undefined && sent.res.status >= 502 && sent.res.status <= 504
   const dropped = sent.error !== undefined || gateway
   if (sent.res && !sent.res.ok && !gateway) {
@@ -784,16 +787,24 @@ export async function restartServer(fetch: Fetch, base: string, input: RestartIn
   }
   let stats: unknown
   let wentDown = false
+  // The wait counts at least the time slept, so the limits hold even on a clock that does not move.
+  let slept = 0
   for (let poll = 0; ; poll++) {
-    await clock.sleep(poll === 0 && dropped ? RESTART_FIRST_POLL_MS : RESTART_POLL_MS)
+    const pause = poll === 0 && dropped ? RESTART_FIRST_POLL_MS : RESTART_POLL_MS
+    await clock.sleep(pause)
+    slept += pause
     const got = await getJson(fetch, base, '/system_stats')
+    const waited = Math.max((await clock.now()) - started, slept)
     if (!got.error && wentDown) {
       stats = got.value
       break
     }
-    if (!got.error) return fail('The reboot was sent, but ComfyUI kept running without restarting (see the server log).')
+    if (!got.error) {
+      if (waited >= RESTART_STILL_UP_MS) return fail('The reboot was sent, but ComfyUI kept running without restarting (see the server log).')
+      continue
+    }
     wentDown = true
-    if ((await clock.now()) - started >= RESTART_TIMEOUT_MS) {
+    if (waited >= RESTART_TIMEOUT_MS) {
       return fail(`The reboot was sent, but ComfyUI did not answer /system_stats within ${RESTART_TIMEOUT_MS / 1000} s. Check the service on the server: under systemd, its status and journal.`)
     }
   }
@@ -884,7 +895,7 @@ export async function saveWorkflow(fetch: Fetch, read: ReadText, base: string, i
 /** Lists the user's saved workflows with GET /api/userdata (recursive, with size and date), paths relative to workflows/. */
 export async function listWorkflows(fetch: Fetch, base: string): Promise<Out> {
   const got = await getJson(fetch, base, `/api/userdata?dir=${WORKFLOWS}&recurse=true&split=false&full_info=true`)
-  if (got.error) return got.error.text.includes('answered 404') ? ok('No workflow is saved yet: the workflows/ folder does not exist.') : got.error
+  if (got.error) return got.status === 404 ? ok('No workflow is saved yet: the workflows/ folder does not exist.') : got.error
   const files = (Array.isArray(got.value) ? got.value : [])
     .filter(isObject)
     .filter((f) => typeof f.path === 'string')
@@ -905,7 +916,7 @@ export async function getWorkflow(fetch: Fetch, write: WriteText, base: string, 
   const file = workflowFile(input.path)
   if (!file) return fail(BAD_WORKFLOW_PATH)
   const got = await getJson(fetch, base, userdataPath(file))
-  if (got.error) return got.error.text.includes('answered 404') ? fail(`No workflow at ${file}: list_workflows shows the saved ones.`) : got.error
+  if (got.error) return got.status === 404 ? fail(`No workflow at ${file}: list_workflows shows the saved ones.`) : got.error
   const text = JSON.stringify(got.value)
   const head = `Workflow ${file} in UI format; edit it and save it back with save_workflow and overwrite: true.\n`
   const asked = str(input.file)

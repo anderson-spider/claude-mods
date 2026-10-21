@@ -86,11 +86,11 @@ test('restart_server waits through the host process, never the hook clock, and r
   expect(busy.isError).toBe(true)
   expect(text(busy)).toContain('1 running and 0 pending job')
   expect(sent.map((s) => s.method)).toEqual(['GET'])
-  // a server that answers the reboot and stays up: one poll, slept through the host process
+  // a server that answers the reboot and stays up for 10 s: polled every 2 s, slept through the host process
   host.routes = { 'GET /queue': { body: { queue_running: [], queue_pending: [] } }, 'POST /v2/manager/reboot': { body: '' }, 'GET /system_stats': { body: { system: {} } } }
   expect(text(await $.tool.call({ tool: id('restart_server') } as never))).toContain('kept running without restarting')
   expect(sent.find((s) => s.url.endsWith('/v2/manager/reboot'))).toEqual({ url: `${URL_OPTION}/v2/manager/reboot`, method: 'POST', body: '{}' })
-  expect(processes).toEqual([['sleep', '2']])
+  expect(processes).toEqual(Array(5).fill(['sleep', '2']))
 })
 
 test('save_workflow, list_workflows and get_workflow go to the user library through the host fetch', ON, async ($, on) => {

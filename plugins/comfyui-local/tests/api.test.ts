@@ -482,6 +482,34 @@ test('restartServer counts an empty answer or a gateway error as a restart only 
   expect((await restartServer(answered({ status: 504, text: 'Gateway Timeout' }), BASE, {}, clock().clock)).text).toContain('kept running without restarting')
 })
 
+test('restartServer waits through the old process answering while it shuts down, and gives up on it after 10 s', async () => {
+  /** The reboot drops the connection; /system_stats answers `up` polls (the old process), is refused `down`, then answers. */
+  const slowExit = (up: number, down: number): Fetch => {
+    let polls = 0
+    return async (url) => {
+      const path = url.slice(BASE.length)
+      if (path === '/queue') return { status: 200, ok: true, text: JSON.stringify({ queue_running: [], queue_pending: [] }) }
+      if (path === '/v2/manager/reboot') throw new Error('socket hang up')
+      if (path === '/system_stats') {
+        const poll = polls++
+        if (poll >= up && poll < up + down) throw new Error('ECONNREFUSED')
+        return { status: 200, ok: true, text: JSON.stringify(STATS) }
+      }
+      return { status: 404, ok: false, text: 'not found' }
+    }
+  }
+  const { clock: c, sleeps } = clock()
+  const out = await restartServer(slowExit(2, 2), BASE, {}, c)
+  expect(out.isError).toBe(false)
+  expect(out.text).toBe('Restarted in 9 s: ComfyUI 0.41.0.')
+  expect(sleeps).toEqual([500, 2_000, 2_000, 2_000, 2_000])
+  // still answering 10 s after the reboot was sent, it never restarted
+  const { clock: late, sleeps: lateSleeps } = clock()
+  const stayed = await restartServer(slowExit(100, 0), BASE, {}, late)
+  expect(stayed.text).toBe('The reboot was sent, but ComfyUI kept running without restarting (see the server log).')
+  expect(lateSleeps).toEqual([500, ...Array(5).fill(2_000)])
+})
+
 const UI = { last_node_id: 1, nodes: [{ id: 1, type: 'SaveImage' }], links: [], version: 0.4 }
 const noRead = async (path: string): Promise<string> => { throw new Error(`no file ${path}`) }
 const noWrite = async (path: string): Promise<void> => { throw new Error(`cannot write ${path}`) }
