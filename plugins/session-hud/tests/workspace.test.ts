@@ -18,13 +18,17 @@ test('a linked worktree is named by the main repository and marked; a detached h
   expect(workspaceOf('/home/me/dev/mods-worktrees/feature', linked, '')).toEqual({ repo: 'mods', worktree: true })
 })
 
-test('outside a repository only the folder is named, and names lose control characters and are cut when long', () => {
+test('outside a repository only the folder is named, and names lose escape sequences and control characters and are cut by code point when long', () => {
   expect(workspaceOf('/home/me/notes/', undefined, undefined)).toEqual({ repo: 'notes' })
   expect(workspaceOf('/', undefined, undefined)).toBeUndefined()
-  expect(workspaceOf('/home/me/a\u001b[31mb', undefined, undefined)).toEqual({ repo: 'a[31mb' })
+  expect(workspaceOf('/home/me/a\u001b[31mb', undefined, undefined)).toEqual({ repo: 'ab' })
   const long = workspaceOf('/r', paths('/r', '', '/r/.git', '/r/.git'), `${'x'.repeat(80)}\n`)
   expect(long?.branch).toHaveLength(64)
   expect(long?.branch?.endsWith('…')).toBe(true)
+  // an emoji is never split in half
+  const emoji = workspaceOf('/r', paths('/r', '', '/r/.git', '/r/.git'), '🙂'.repeat(80))
+  expect([...(emoji?.branch ?? '')]).toHaveLength(64)
+  expect(emoji?.branch?.startsWith('🙂'.repeat(63))).toBe(true)
 })
 
 test('two readings of the same place are the same workspace', () => {
