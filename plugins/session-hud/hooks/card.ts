@@ -1,5 +1,6 @@
 // Pure updates of the card from what the host reported. register.tsx owns every `$` call and passes the figures in.
-import type { SessionHudAgent, SessionHudCard, SessionHudLimit, SessionHudTurn } from '../types'
+import type { SessionHudAgent, SessionHudCard, SessionHudLimit, SessionHudTurn, SessionHudWorkspace } from '../types'
+import { sameWorkspace } from './workspace'
 import { cacheShare } from './usage'
 
 export const EMPTY: SessionHudCard = { limits: [], edits: 0, errors: 0, turns: 0, agents: [], history: [] }
@@ -149,4 +150,11 @@ export function reconciled(card: SessionHudCard, list: readonly { id: unknown; s
     return listed ? { ...agent, type: listed.type as string } : agent
   })
   return typed.length === agents.length && typed.every((agent, i) => agent === agents[i]) ? card : { ...card, agents: typed }
+}
+
+/** Where the session works, as last read; an unchanged reading leaves the card as it was, and none clears it. */
+export const located = (card: SessionHudCard, workspace: SessionHudWorkspace | undefined): SessionHudCard => {
+  if (sameWorkspace(card.workspace, workspace)) return card
+  const { workspace: _gone, ...rest } = card
+  return workspace ? { ...rest, workspace } : rest
 }

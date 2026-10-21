@@ -50,6 +50,16 @@ export function headCells(card: SessionHudCard, now: number, working: boolean): 
   return head
 }
 
+/** Where the session works: `spider-claude-mods/plugins · ⎇ main · worktree`; a part git did not name is left out, and nothing before the first reading. */
+export function workspaceCells(card: SessionHudCard): Row {
+  const place = card.workspace
+  if (typeof place?.repo !== 'string' || !place.repo) return []
+  const row: Row = [seg(typeof place.sub === 'string' ? `${place.repo}/${place.sub}` : place.repo, 'sent')]
+  if (typeof place.branch === 'string' && place.branch) row.push(seg(' · ', 'secondary'), seg(`⎇ ${place.branch}`, 'success'))
+  if (place.worktree === true) row.push(seg(' · worktree', 'secondary'))
+  return row
+}
+
 export const LABELS: Readonly<Record<string, string>> = { five_hour: '5h', seven_day: '7d' }
 /** The windows the card draws, the shorter first, at most two. */
 export const shownLimits = (card: SessionHudCard): SessionHudCard['limits'] => card.limits

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionHudCard } from '../types'
-import { agentCells, agentTokenCells, cacheCells, contextOf, headCells, modelName, shownLimits, turnCells } from '../hooks/view'
+import { agentCells, agentTokenCells, cacheCells, contextOf, headCells, modelName, shownLimits, turnCells, workspaceCells } from '../hooks/view'
 import type { Row } from '../hooks/view'
 
 const now = Date.parse('2026-10-13T12:00:00Z')
@@ -70,4 +70,13 @@ test('what the agents used is a token total, left out before any usage and never
   expect(text(agentTokenCells({ ...full, agentTokens: 1_234_567 }))).toBe('agents used 1.2M tokens')
   expect(text(agentTokenCells({ ...full, agentTokens: 42_000 }))).toBe('agents used 42k tokens')
   for (const bad of [undefined, 0, -5, Number.NaN, '9000']) expect(agentTokenCells({ ...full, agentTokens: bad } as never)).toEqual([])
+})
+
+test('the workspace names the repository and its folder, the branch and a worktree; nothing before the first reading', () => {
+  expect(workspaceCells(full)).toEqual([])
+  expect(text(workspaceCells({ ...full, workspace: { repo: 'mods' } }))).toBe('mods')
+  const linked = workspaceCells({ ...full, workspace: { repo: 'mods', sub: 'plugins', branch: 'me/feature', worktree: true } })
+  expect(text(linked)).toBe('mods/plugins · ⎇ me/feature · worktree')
+  expect(linked[0]).toEqual({ text: 'mods/plugins', style: 'sent' })
+  expect(linked[2]).toEqual({ text: '⎇ me/feature', style: 'success' })
 })

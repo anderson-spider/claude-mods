@@ -1,5 +1,13 @@
 import { expect, test } from 'claude-code/testing'
-import { EMPTY, HISTORY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from '../hooks/card'
+import { EMPTY, HISTORY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, located, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from '../hooks/card'
+
+test('a workspace reading replaces the last, an unchanged one leaves the card as it was, and none clears it', () => {
+  const card = located(EMPTY, { repo: 'mods', branch: 'main' })
+  expect(card).toEqual({ ...EMPTY, workspace: { repo: 'mods', branch: 'main' } })
+  expect(located(card, { repo: 'mods', branch: 'main' })).toBe(card)
+  expect(located(card, { repo: 'mods', branch: 'dev' }).workspace).toEqual({ repo: 'mods', branch: 'dev' })
+  expect(located(card, undefined)).toEqual(EMPTY)
+})
 
 test('a measurement keeps the context and the readable windows, and nothing of a cost', () => {
   const card = measured(EMPTY, { context: { tokens: 10, window: 100, percent: 10 }, cost: { usd: 1.5 },

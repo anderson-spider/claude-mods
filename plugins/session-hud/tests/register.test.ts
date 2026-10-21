@@ -30,6 +30,38 @@ test('the card draws the session as measured: model, effort, context, cache, bot
   await ui.unmount()
 })
 
+test('the head line names the workspace by repository, folder and branch, read again after a main turn and a directory change, never as a path', async ($, on) => {
+  const { place } = world(on, { repo: { top: '/home/me/dev/mods', prefix: 'plugins/', gitDir: '/home/me/dev/mods/.git', common: '/home/me/dev/mods/.git', branch: 'main' } })
+  place.cwd = '/home/me/dev/mods/plugins'
+  await start($)
+  await flush()
+  const drawn = async () => {
+    const ui = await $.ui.mount(band())
+    const text = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
+    await ui.unmount()
+    return text
+  }
+  expect(await drawn()).toContain('Opus 5.5mods/plugins · ⎇ main')
+  expect(await drawn()).not.toContain('/home/me')
+  place.repo = { ...place.repo!, branch: 'me/feature' }
+  await $.turn.start({ text: 'checkout', turnId: 't1' } as never)
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  expect(await drawn()).toContain('mods/plugins · ⎇ me/feature')
+  place.cwd = '/home/me/dev/mods-worktrees/feature'
+  place.repo = { top: place.cwd, prefix: '', gitDir: '/home/me/dev/mods/.git/worktrees/feature', common: '/home/me/dev/mods/.git', branch: 'me/feature' }
+  await $.classic.CwdChanged({ old_cwd: '/home/me/dev/mods/plugins', new_cwd: place.cwd } as never)
+  await flush()
+  expect(await drawn()).toContain('mods · ⎇ me/feature · worktree')
+  place.cwd = '/home/me/notes'
+  delete place.repo
+  await $.classic.CwdChanged({ old_cwd: '/home/me/dev/mods-worktrees/feature', new_cwd: place.cwd } as never)
+  await flush()
+  const outside = await drawn()
+  expect(outside).toContain('notes')
+  expect(outside).not.toContain('⎇')
+})
+
 test('main-session edits and errors are counted after their result, which goes on unchanged; a subagent counts nothing', async ($, on) => {
   world(on)
   on('tool.call', (_$, e) => {

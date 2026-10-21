@@ -17,9 +17,13 @@ export const USAGE = {
   cost: { usd: 4.43 },
 }
 
-/** A host with the session's model, usage, theme and clock (stopped at NOW, or moving with the test's advances when `moving`); a spawn (refused with `denySpawn`) starts `agent-1`, `agent-2`... on its `model` (Sonnet 4.5 when none), and `roster` is what `$.agent.list()` answers. */
-export function world(on: On, opts: { theme?: string; window?: number; denySpawn?: string; moving?: boolean } = {}) {
+/** What git answers for the session's directory: its working tree, the folder within it, the git dirs and the branch (empty on a detached head). */
+export type Repo = { top: string; prefix: string; gitDir: string; common: string; branch: string }
+
+/** A host with the session's model, usage, theme, directory and clock (stopped at NOW, or moving with the test's advances when `moving`); a spawn (refused with `denySpawn`) starts `agent-1`, `agent-2`... on its `model` (Sonnet 4.5 when none), `roster` is what `$.agent.list()` answers, and `place.repo` is what git answers for `place.cwd` (no repository when absent). */
+export function world(on: On, opts: { theme?: string; window?: number; denySpawn?: string; moving?: boolean; repo?: Repo } = {}) {
   const roster: AgentInfo[] = []
+  const place: { cwd: string; repo?: Repo } = { cwd: '/proj', ...(opts.repo ? { repo: opts.repo } : {}) }
   let spawns = 0
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one: the test's own reads NOW.
   const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On, { now: NOW })
@@ -36,6 +40,17 @@ export function world(on: On, opts: { theme?: string; window?: number; denySpawn
   on('turn.complete', () => ({ text: 'done' }) as never)
   on('classic.PostModelSwitch', () => ({}) as never)
   on('classic.PostCompact', () => ({}) as never)
+  on('classic.CwdChanged', () => ({}) as never)
+  on('session.cwd', () => ({ value: place.cwd }))
+  const ran = (exitCode: number, stdout = '', stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+  on('process.run', (_$, e) => {
+    const repo = place.repo
+    const args = e.argv.slice(2).join(' ')
+    if (e.argv[0] !== 'git' || !repo) return ran(128, '', 'fatal: not a git repository')
+    if (args.startsWith('rev-parse')) return ran(0, `${repo.top}\n${repo.prefix}\n${repo.gitDir}\n${repo.common}\n`)
+    if (args === 'branch --show-current') return ran(0, repo.branch ? `${repo.branch}\n` : '')
+    return ran(1)
+  })
   // Opus answers with 95% of its input cached and 5 output tokens, each request reading 100 more cached tokens than the
   // one before; any other model as named, uncached, with 700.
   let opus = 0
@@ -49,7 +64,7 @@ export function world(on: On, opts: { theme?: string; window?: number; denySpawn
   on('agent.list', () => ({ value: roster }))
   // What draws beneath the card in the band: another plugin's tree, such as a row of suggestions.
   on('ui.render', { component: 'AbovePrompt' }, () => BENEATH)
-  return { clock, roster }
+  return { clock, roster, place }
 }
 
 /** The band's tree beneath the card. */
