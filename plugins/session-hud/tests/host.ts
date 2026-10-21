@@ -21,7 +21,7 @@ export const USAGE = {
 export type Repo = { top: string; prefix: string; gitDir: string; common: string; branch: string }
 
 /** A host with the session's model, usage, theme, directory and clock (stopped at NOW, or moving with the test's advances when `moving`); a spawn (refused with `denySpawn`) starts `agent-1`, `agent-2`... on its `model` (Sonnet 4.5 when none), `roster` is what `$.agent.list()` answers, and `place.repo` is what git answers for `place.cwd` (no repository when absent). */
-export function world(on: On, opts: { theme?: string; window?: number; denySpawn?: string; moving?: boolean; repo?: Repo } = {}) {
+export function world(on: On, opts: { theme?: string; window?: number; denySpawn?: string; moving?: boolean; repo?: Repo; fork?: string; refuseFill?: boolean } = {}) {
   const roster: AgentInfo[] = []
   const place: { cwd: string; repo?: Repo } = { cwd: '/proj', ...(opts.repo ? { repo: opts.repo } : {}) }
   let spawns = 0
@@ -64,7 +64,24 @@ export function world(on: On, opts: { theme?: string; window?: number; denySpawn
   on('agent.list', () => ({ value: roster }))
   // What draws beneath the card in the band: another plugin's tree, such as a row of suggestions.
   on('ui.render', { component: 'AbovePrompt' }, () => BENEATH)
-  return { clock, roster, place }
+  // The next steps: the fork answers `opts.fork` (nothing to fork without it), the session has two commands, and the
+  // prompt box takes a fill unless `refuseFill`; what reached the fork, the box, its ghost text and the toasts is kept.
+  const asked: string[] = []
+  const fills: string[] = []
+  const suggested: string[] = []
+  const toasts: string[] = []
+  on('model.fork', (_$, e) => {
+    asked.push(e.prompt)
+    return { value: opts.fork === undefined ? { isAnswered: false, reason: 'nothing-to-fork' } : { isAnswered: true, text: opts.fork, usage: {} } } as never
+  })
+  on('command.list', () => ({ value: [
+    { name: 'code-review', description: 'Review the current diff', source: 'plugin' },
+    { name: 'clear', description: 'Clear the conversation', source: 'builtin' },
+  ] }) as never)
+  on('prompt.fill', (_$, e) => (opts.refuseFill ? { isFilled: false } : (fills.push(e.text), { isFilled: true })) as never)
+  on('prompt.suggest', (_$, e) => (suggested.push(e.text), { isShown: true }) as never)
+  on('ui.toast', (_$, e) => (toasts.push(e.text), { value: undefined }))
+  return { clock, roster, place, asked, fills, suggested, toasts }
 }
 
 /** The band's tree beneath the card. */

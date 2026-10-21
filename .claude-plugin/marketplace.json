@@ -45,7 +45,7 @@
     {
       "name": "session-hud",
       "source": "./plugins/session-hud",
-      "description": "A card above the prompt: model, the repository, folder and branch, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors."
+      "description": "A card above the prompt: model, the repository, folder and branch, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors; and, when turned on, next steps to tick and put in the prompt."
     },
     {
       "name": "spider-team",
