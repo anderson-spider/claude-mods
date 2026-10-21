@@ -5,7 +5,7 @@ import type { SpiderRun } from '../types'
 import { isOver } from './state'
 
 /** The shape of the stored state, the atoms' and the saved run's: change it whenever a stored type changes. */
-export const STATE_SHAPE = 'spider-team/1'
+export const STATE_SHAPE = 'spider-team/2'
 
 export type SavedRun = { shape: string; run: SpiderRun; savedAt: number }
 

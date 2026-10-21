@@ -81,7 +81,7 @@ test('finished agents show how they ended, why a failed one did and when, and th
 
 test("planned agents are the role tasks no agent has taken yet, with the role's model and a hollow block", () => {
   const task = (id: string, owner: SpiderTask['owner'], over: Partial<SpiderTask> = {}): SpiderTask => ({ id, title: `Task ${id}`, owner, after: [], state: 'pending', attempts: 1, errors: [], agentIds: [], ...over })
-  const run: SpiderRun = { ...RUN, tasks: [...RUN.tasks, task('T2', 'reviewer', { after: ['T1'] }), task('T3', 'main'), task('T4', 'planner', { state: 'cancelled' })] }
+  const run: SpiderRun = { ...RUN, tasks: [...RUN.tasks, task('T2', 'reviewer', { after: ['T1'] }), task('T3', 'main'), task('T4', 'worker', { state: 'cancelled' })] }
   const planned = card('planned', { run, lang: 'pt-BR' })!
   expect(planned.title).toBe('Agentes · planejados')
   expect(planned.count).toBe('1')
@@ -126,23 +126,23 @@ test('a long title wraps to two lines under itself and then is cut, its owner an
   expect(lines[4]).toMatch(/^ {5}x+…$/)
 })
 
-test("the timeline always has Main and the four roles, idle ones empty, lit in one-minute buckets, and an axis", () => {
+test("the timeline always has Main and the three roles, idle ones empty, lit in one-minute buckets, and an axis", () => {
   const now = 20 * 60_000
   const main: SpiderMain = { ...MAIN, busySince: undefined, turns: [[6 * 60_000, 7 * 60_000]] }
   const old = { ...RESEARCHER, agentId: 'old', endedAt: 60_000 }
   const researcher = { ...RESEARCHER, agentId: 'e', startedAt: 15 * 60_000, endedAt: 16 * 60_000 }
   const lines = card('timeline', { now, main, agents: [{ ...WORKER, startedAt: 18 * 60_000 }, old, researcher] })!.lines
-  expect(lines.map(l => l[0]!.text.trim())).toEqual(['main', 'planner', 'worker', 'researcher', 'reviewer', ''])
-  expect(lines[4]!.map(p => [p.style, p.tone])).toEqual([['plain', 'planMode'], ['barEmpty', undefined]])
+  expect(lines.map(l => l[0]!.text.trim())).toEqual(['main', 'worker', 'researcher', 'reviewer', ''])
+  expect(lines[3]!.map(p => [p.style, p.tone])).toEqual([['plain', 'planMode'], ['barEmpty', undefined]])
   expect(lines[0]![0]!.tone).toBe('claude')
   const cw = (110 - FRAME - 12) / 15 | 0
   expect(all([lines[0]!]).slice(12)).toBe(`${'·'.repeat(cw)}${'━'.repeat(cw)}${'·'.repeat(13 * cw)}`)
-  expect(all([lines[2]!]).slice(12).endsWith(`${'·'.repeat(cw)}${'━'.repeat(2 * cw)}`)).toBe(true)
-  expect(lines[2]!.find(p => p.text.includes('━'))!.tone).toBe('suggestion')
-  expect(all([lines[3]!]).slice(12)).toBe(`${'·'.repeat(10 * cw)}${'━'.repeat(cw)}${'·'.repeat(4 * cw)}`)
-  expect(all([lines[5]!])).toMatch(/^ +−15m +now$/)
+  expect(all([lines[1]!]).slice(12).endsWith(`${'·'.repeat(cw)}${'━'.repeat(2 * cw)}`)).toBe(true)
+  expect(lines[1]!.find(p => p.text.includes('━'))!.tone).toBe('suggestion')
+  expect(all([lines[2]!]).slice(12)).toBe(`${'·'.repeat(10 * cw)}${'━'.repeat(cw)}${'·'.repeat(4 * cw)}`)
+  expect(all([lines[4]!])).toMatch(/^ +−15m +now$/)
   const quiet = card('timeline', { now: 60 * 60_000, main: { ...MAIN, busySince: undefined }, agents: [old] })!.lines
-  expect(quiet.map(l => l[0]!.text.trim())).toEqual(['main', 'planner', 'worker', 'researcher', 'reviewer', ''])
+  expect(quiet.map(l => l[0]!.text.trim())).toEqual(['main', 'worker', 'researcher', 'reviewer', ''])
 })
 
 test('without a run the pane still lists agents, and without agents it says so', () => {

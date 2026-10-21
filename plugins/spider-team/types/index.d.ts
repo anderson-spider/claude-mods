@@ -7,7 +7,7 @@ export type SpiderPhase = 'understand' | 'plan' | 'investigate' | 'execute' | 'r
 /** A task's stored state; `blocked` is derived from its dependencies, never stored. */
 export type SpiderTaskState = 'pending' | 'running' | 'reviewing' | 'completed' | 'failed' | 'cancelled'
 /** A spider-team agent role (the identifier keeps its old name). */
-export type SpiderTier = 'planner' | 'worker' | 'researcher' | 'reviewer'
+export type SpiderTier = 'worker' | 'researcher' | 'reviewer'
 export type SpiderOwner = 'main' | SpiderTier
 
 export type SpiderTask = {

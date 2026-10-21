@@ -1,6 +1,6 @@
 # spider-team
 
-`/spider-team:brainstorm <task>` makes the session the owner and main implementer of a task: it understands it, plans tasks with dependencies, settles what the plan leaves open with you, and after your go writes the code itself, calls a planner, researcher or reviewer when they add value, splits off parallel workers only when independent parts gain from it, checks what comes back against the real diff, verifies the integrated result and delivers, while a `/spider-agents` pane shows the run. A delegate only claims it is done; a task counts once the session has reviewed it.
+`/spider-team:brainstorm <task>` makes the session the owner and main implementer of a task: it understands it, plans tasks with dependencies, settles what the plan leaves open with you, and after your go writes the code itself, calls a researcher or reviewer when they add value, splits off parallel workers only when independent parts gain from it, checks what comes back against the real diff, verifies the integrated result and delivers, while a `/spider-agents` pane shows the run. A delegate only claims it is done; a task counts once the session has reviewed it.
 
 ```text
 /plugin install spider-team --marketplace anderson-spider/claude-mods
@@ -28,7 +28,6 @@ The rules every run needs live in the skill; the steps for a case (a bug, a revi
 
 | Agent | Model | Default effort | For | Tools |
 | --- | --- | --- | --- | --- |
-| `spider-planner` | Opus 5.5 (`claude-opus-5-5`) | medium | a plan for a complex decision: options, dependencies, acceptance criteria | `Read`, `Grep`, `Glob` |
 | `spider-worker` | Sonnet 5.5 (`claude-sonnet-5-5`) | medium | one bounded implementation task in parallel with other work | every tool but `Agent` |
 | `spider-researcher` | Haiku 5.5 (`claude-haiku-5-5`) | medium | web research, reading code, reading or writing documentation | `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, `Edit` |
 | `spider-reviewer` | Opus 5.5 (`claude-opus-5-5`) | medium | reviewing a change on two separate axes, Spec (what was asked) and Standards (the project's documented rules, plus code smells with their fix as optional calls), each finding must-fix or optional with location, evidence and impact | `Read`, `Grep`, `Glob` |
@@ -42,7 +41,7 @@ Set them in `/plugin` (or `pluginConfigs["spider-team@spider-claude-mods"].optio
 | Option | Default | What it sets |
 | --- | --- | --- |
 | `max_workers` | 2 | the most workers that run at once (1 to 8) |
-| `planner_effort`, `worker_effort`, `researcher_effort`, `reviewer_effort` | `medium` | the effort the session asks for when it calls that role: `low`, `medium`, `high`, `xhigh` or `max`, all supported by the three 5.5 models |
+| `worker_effort`, `researcher_effort`, `reviewer_effort` | `medium` | the effort the session asks for when it calls that role: `low`, `medium`, `high`, `xhigh` or `max`, all supported by the three 5.5 models |
 | `language` | `auto` | the pane language: `auto` follows the Claude Code language setting, then the locale variables `LC_ALL`, `LC_MESSAGES` and `LANG`, else English; `pt-BR` or `en` fix it |
 | `autoOpen` | `team` | when the pane opens on its own: `team` when a run starts, `any` when a spider-team agent starts with none running, `off` only with `/spider-agents`; a pane you close stays closed for the agents already at work |
 | `showCost`, `showTokens`, `showContext` | on | the estimated cost, the token counts and the context of each agent |
@@ -53,7 +52,7 @@ An invalid pane option falls back to its default. An effort you ask for in the c
 
 ## What is enforced
 
-- **Enforced by the agent definitions' tools**: the planner and the reviewer have no edit, shell or agent tool, so they cannot change files or Git state. The researcher has no shell, so it runs no command and changes no Git state. No agent can start agents of its own (the worker has `Agent` removed; the others do not list it).
+- **Enforced by the agent definitions' tools**: the reviewer has no edit, shell or agent tool, so it cannot change files or Git state. The researcher has no shell, so it runs no command and changes no Git state. No agent can start agents of its own (the worker has `Agent` removed; the others do not list it).
 - **Enforced by the plugin's hook**: a spider-team agent's `Bash` call may run `git`, `gh` and `glab` only in their read-only forms; anything else that names them is refused before it runs, with a message that Main commits and publishes. Git passes with `status`, `diff`, `log`, `show`, `blame`, `grep`, `ls-files`, `rev-parse` and similar readers, with `fetch` unless an argument has a colon (a refspec that updates a local ref), and with `branch`, `tag`, `stash`, `worktree`, `remote`, `reflog`, `config`, `symbolic-ref` and `submodule` only when they list or get; `gh` and `glab` pass with the verbs `view`, `list`, `diff`, `checks`, `status`, `watch` and `trace` under any noun, and with `search`, `help` and `auth status`. Every other subcommand, alias or verb is refused, `gh api` and `pr create` included. The check drops quotes and splits the line at `;`, `&&`, `|` and parentheses, so it finds the CLIs after other commands and behind `sudo` or `env`; a line that names one of them beside a substitution, `eval`, a heredoc, `sh -c` or an interpreter's inline script is refused whole. It reads text and runs no shell, so it errs on refusing: `grep "git push" docs` is refused too, and the agent reports the read it needed. When the lookup of the agent's role fails, any subagent's call is checked the same way. The session's own calls and other agents' are not touched.
 - **What it does not cover**: the guard stops an agent that forgets the rule, not one trying to get around it. A script the agent writes and runs, an HTTP call to the GitHub or GitLab API, or a PR opened through an MCP tool gets through. So does a CLI name built at run time (`G=git; $G commit`). Local commits stay possible wherever the agent can write `.git`, sandbox included; what keeps them from reaching the base branches is the server: protect those branches and give the session credentials without push rights where it matters.
 - **Only asked in the prompts**: that the worker stays inside its brief's scope, and that the researcher writes only the documentation paths its brief names. A tool list cannot scope `Write` to some paths, and a plugin agent's `permissionMode` and `hooks` are ignored.
@@ -67,7 +66,7 @@ An invalid pane option falls back to its default. An effort you ask for in the c
   - **Agents · running**: each running agent in its role's colour with its model, one block per attempt at its task (earlier ones green or red), its time and task, then what it is on: effort (planned → actual when they differ; planned is the role's default, since the host does not report the effort a call asked for, so a role effort set in the options below or a rating from subagent-effort shows as a change), steps, latest tools, call count and failed calls, context, tokens and cost.
   - **Agents · finished**: the session's finished agents, newest first, with how long they ran, why a failed one ended and how long ago.
   - **Agents · planned**: the role tasks no agent has taken yet, with the role's model.
-  - **Last 15 minutes**: a lane for Main and each of the four roles, always there and empty while idle, lit in the minutes it worked.
+  - **Last 15 minutes**: a lane for Main and each of the three roles, always there and empty while idle, lit in the minutes it worked.
 - On the terminal the cards are drawn with box characters; on the desktop as one picture with outlined plates, in light or dark colours by the system's scheme. A pane short of rows first folds the accepted tasks into one line with their ids (`✓ 4 accepted  T1–T3, T5`), then leaves out the timeline, then the finished and the planned agents; what is still taller than the pane scrolls with the wheel, or with the arrows while the pane is focused.
 - **Only spider-team's agents** show in the pane, inside a run or outside one. Other agent types (`Explore`, `general-purpose` and the like) are not tracked, since the host does not report how some of them end and they would stay running in the pane.
 

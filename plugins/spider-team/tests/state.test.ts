@@ -166,7 +166,7 @@ test('junk input is bounded, unknown deps dropped and a cycle refused', () => {
   expect(run.tasks[0]!.title.length).toBe(LIMITS.title)
   expect(run.tasks[0]!.after).toEqual([])
   const bad = applyProgress(null, { title: 'Bad', tasks: [{ id: 3, title: 'n', owner: 'main' }, { id: 'T1', title: 'ok', owner: 'wizard' }] }, ctx())
-  expect(bad.text).toBe('refused: each task needs an id like T1, a title and an owner (main, planner, worker, researcher or reviewer)')
+  expect(bad.text).toBe('refused: each task needs an id like T1, a title and an owner (main, worker, researcher or reviewer)')
   const cycle = applyProgress(null, { title: 'Loop', tasks: [{ id: 'T1', title: 'a', owner: 'main', after: ['T2'] }, { id: 'T2', title: 'b', owner: 'main', after: ['T1'] }] }, ctx())
   expect(cycle).toEqual({ run: null, text: 'refused: the dependencies form a cycle (T1 → T2 → T1)' })
 })

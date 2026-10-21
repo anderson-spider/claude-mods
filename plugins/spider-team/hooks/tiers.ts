@@ -3,13 +3,12 @@ import type { SpiderTier } from '../types'
 
 /** The model each role runs and the effort spider-team asks for by default (Jev may replace it). */
 export const TIERS: Record<SpiderTier, { model: string; effort: string }> = {
-  planner: { model: 'claude-opus-5-5', effort: 'medium' },
   worker: { model: 'claude-sonnet-5-5', effort: 'medium' },
   researcher: { model: 'claude-haiku-5-5', effort: 'medium' },
   reviewer: { model: 'claude-opus-5-5', effort: 'medium' },
 }
 
-const TIER_TYPE = /^(?:spider-team:)?spider-(planner|worker|researcher|reviewer)$/
+const TIER_TYPE = /^(?:spider-team:)?spider-(worker|researcher|reviewer)$/
 
 /** The role of a spawned agent type: spider-team's agents, namespaced by the plugin or not; anything else has none. */
 export const tierOf = (type?: string): SpiderTier | undefined => (type ? (TIER_TYPE.exec(type)?.[1] as SpiderTier | undefined) : undefined)
