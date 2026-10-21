@@ -56,11 +56,11 @@ export type SessionHudCard = {
 /** One next step: the label its checkbox shows and the prompt it puts in the prompt box, both cleaned. */
 export type SessionHudStep = { label: string; prompt: string }
 
-/** The next steps under the card: none, a fork asked after the main turn `turnId`, or the steps it offered and the ones ticked, by index. */
+/** The next steps under the card: none, a fork asked after the main turn `turnId`, or the steps it offered. */
 export type SessionHudSteps =
   | { kind: 'hidden' }
   | { kind: 'loading'; turnId: string }
-  | { kind: 'offer'; steps: SessionHudStep[]; picked: number[] }
+  | { kind: 'offer'; steps: SessionHudStep[] }
 
 declare module 'claude-code' {
   interface PluginState {

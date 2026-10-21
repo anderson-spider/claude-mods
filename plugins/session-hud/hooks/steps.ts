@@ -1,6 +1,6 @@
-// The next steps: the question a fork of the session answers after a main turn, its reply read into steps, and the
-// ticked steps turned into the prompt box's draft. Pure: no host access. The fork prompt, `clean`, `skillList` and the
-// reply's checks are adapted from next-steps by Thariq Shihipar, the ticking and numbered draft from inline-next-steps
+// The next steps: the question a fork of the session answers after a main turn and its reply read into steps, one of
+// which a digit puts in the prompt box. Pure: no host access. The fork prompt, `clean`, `skillList` and the reply's
+// checks are adapted from next-steps by Thariq Shihipar, the steps on digit keys under the card from inline-next-steps
 // by Shijie Li, both MIT (`hooks/LICENSE.next-steps.txt`).
 import type { CommandInfo } from 'claude-code'
 import type { SessionHudStep, SessionHudSteps } from '../types'
@@ -131,22 +131,7 @@ export function earnsSteps(reason: string, answer: string): boolean {
 /** The steps offered after a fork answered, or hidden when it found none; a stale fork (another turn since) changes nothing. */
 export function offered(current: SessionHudSteps, turnId: string, steps: readonly SessionHudStep[]): SessionHudSteps {
   if (current.kind !== 'loading' || current.turnId !== turnId) return current
-  return steps.length === 0 ? HIDDEN : { kind: 'offer', steps: [...steps], picked: [] }
-}
-
-/** Ticks or unticks step `i`, keeping the ticked ones in list order; anything but an offer stays. */
-export function toggled(current: SessionHudSteps, i: number): SessionHudSteps {
-  if (current.kind !== 'offer' || current.steps[i] === undefined) return current
-  const picked = current.picked.includes(i) ? current.picked.filter(x => x !== i) : [...current.picked, i].sort((a, b) => a - b)
-  return { ...current, picked }
-}
-
-/** The draft the ticked steps make: one prompt as is, several numbered; empty when none is ticked. */
-export function draftOf(current: SessionHudSteps): string {
-  if (current.kind !== 'offer') return ''
-  const chosen = current.picked.map(i => current.steps[i]).filter((s): s is SessionHudStep => s !== undefined)
-  if (chosen.length <= 1) return chosen[0]?.prompt ?? ''
-  return chosen.map((s, i) => `${i + 1}. ${s.prompt}`).join('\n')
+  return steps.length === 0 ? HIDDEN : { kind: 'offer', steps: [...steps] }
 }
 
 /** Whether a step runs a slash command, drawn apart from a prompt in prose. */

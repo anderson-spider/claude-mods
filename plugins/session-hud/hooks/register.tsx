@@ -8,7 +8,7 @@ import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
 import { layoutView } from './layout'
 import type { Drawing, Piece } from './layout'
-import { HIDDEN, draftOf, earnsSteps, forkPrompt, isCommand, offered, parseSteps, skillList, toggled } from './steps'
+import { HIDDEN, earnsSteps, forkPrompt, isCommand, offered, parseSteps, skillList } from './steps'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
@@ -113,15 +113,16 @@ async function suggest($: Dollar, turnId: string): Promise<void> {
   }
 }
 
-/** Puts the ticked steps in the prompt box as a draft, never sent; where the surface draws its own composer, on the clipboard. */
-async function fill($: Dollar, surface: RenderSurface): Promise<void> {
-  const text = draftOf(await read($, stepsAtom))
+/** Puts step `i` in the prompt box as a draft, never sent; where the surface draws its own composer, on the clipboard. */
+async function fill($: Dollar, surface: RenderSurface, i: number): Promise<void> {
+  const current = await read($, stepsAtom)
+  const text = current.kind === 'offer' ? current.steps[i]?.prompt ?? '' : ''
   if (text === '') return
   const filled = await $.prompt.fill({ text })
   if (!filled.isFilled) {
     if (filled.refusal !== 'no_composer') return $.ui.toast('The prompt box is busy; try again')
     const copied = await $.ui.copy({ text, surface })
-    if (!copied.isCopied) return $.ui.toast('Could not put the steps in the prompt')
+    if (!copied.isCopied) return $.ui.toast('Could not put the step in the prompt')
     $.ui.toast('Copied; paste it into the prompt')
   }
   await update($, stepsAtom, () => HIDDEN)
@@ -267,21 +268,17 @@ export const register: Register = (on, options) => {
       const piece = (part: Piece, key: string) => ('text' in part
         ? <Text key={key} {...paint(palette, part.style)} {...(terminal ? { wrap: 'truncate-end' as const } : {})}>{part.text}</Text>
         : drawing(part, key))
-      // The next steps under the card's lines: a digit ticks one (from an empty prompt box), p puts the ticked ones in
-      // the prompt box, 0 dismisses. A slash command is drawn in the sent colour, apart from a prompt in prose.
+      // The next steps under the card's lines: a digit (from an empty prompt box) puts its step in the prompt box, 0
+      // dismisses. A slash command is drawn in the sent colour, apart from a prompt in prose.
       const stepsSection = () => {
         if (steps.kind === 'hidden') return null
         const head = <Text key="steps-head" {...paint(palette, 'secondary')}>{steps.kind === 'loading' ? 'next steps…' : 'next steps'}</Text>
         if (steps.kind === 'loading') return <Box key="steps" flexDirection="column" marginTop={1}>{head}</Box>
-        const row = (step: SessionHudStep, i: number) => {
-          const ticked = steps.picked.includes(i)
-          const style = isCommand(step) ? 'sent' : ticked ? 'plain' : 'secondary'
-          return <Button key={`step-${i}`} hotkey={String(i + 1)} plain onPress={() => update($, stepsAtom, current => toggled(current, i))}>
-            <Text {...paint(palette, style)}>{`${ticked ? '☑' : '☐'} ${step.label}`}</Text>
+        const row = (step: SessionHudStep, i: number) =>
+          <Button key={`step-${i}`} hotkey={String(i + 1)} plain onPress={() => fill($, e.surface, i)}>
+            <Text {...paint(palette, isCommand(step) ? 'sent' : 'secondary')}>{`${i + 1}. ${step.label}`}</Text>
           </Button>
-        }
         const half = Math.ceil(steps.steps.length / 2)
-        const count = steps.picked.length
         return <Box key="steps" flexDirection="column" marginTop={1}>
           {head}
           <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
@@ -289,9 +286,7 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column">{steps.steps.slice(half).map((step, i) => row(step, i + half))}</Box>
           </Box>
           <Box flexDirection="row" flexWrap="wrap" columnGap={2} alignItems="center">
-            {count > 0
-              ? <Button key="steps-fill" hotkey="p" variant="primary" label={count === 1 ? 'Put in prompt' : `Put ${count} in prompt`} onPress={() => fill($, e.surface)} />
-              : <Text key="steps-hint" {...paint(palette, 'secondary')}>tick with 1–{steps.steps.length}, then p puts them in the prompt</Text>}
+            <Text key="steps-hint" {...paint(palette, 'secondary')}>1–{steps.steps.length} puts one in the prompt</Text>
             <Button key="steps-dismiss" hotkey="0" plain dimColor label="dismiss" onPress={() => update($, stepsAtom, () => HIDDEN)} />
           </Box>
         </Box>

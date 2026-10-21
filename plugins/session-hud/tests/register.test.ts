@@ -459,13 +459,13 @@ test('with nextSteps on, a main answer asks a fork with the session commands and
   const ui = await $.ui.mount(band())
   const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
   expect(drawn).toContain('next steps')
-  expect(drawn).toContain('☐ Run the tests')
-  expect(drawn).toContain('☐ Review')
+  expect(drawn).toContain('1. Run the tests')
+  expect(drawn).toContain('3. Review')
   expect(drawn).toContain('beneath')
   await ui.unmount()
 })
 
-test('ticking two steps puts them in the prompt box numbered, never sent, and the section clears', { options: { nextSteps: true } }, async ($, on) => {
+test('pressing a step puts it in the prompt box, never sent, and the section clears', { options: { nextSteps: true } }, async ($, on) => {
   const { fills } = world(on, { fork: FORK })
   await start($)
   await flush()
@@ -473,17 +473,14 @@ test('ticking two steps puts them in the prompt box numbered, never sent, and th
   await flush()
   const ui = await $.ui.mount(band())
   await ui.press({ key: 'step-2' })
-  await ui.press({ key: 'step-0' })
-  expect(await labels(ui)).toContain('Put 2 in prompt')
-  await ui.press({ key: 'steps-fill' })
   await flush()
-  expect(fills).toEqual(['1. Run npm run plugins:test -- session-hud\n2. /code-review high'])
+  expect(fills).toEqual(['/code-review high'])
   const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
   expect(drawn).not.toContain('next steps')
   await ui.unmount()
 })
 
-test('a busy prompt box keeps the ticks and says so; dismiss clears the steps', { options: { nextSteps: true } }, async ($, on) => {
+test('a busy prompt box keeps the steps and says so; dismiss clears them', { options: { nextSteps: true } }, async ($, on) => {
   const { toasts } = world(on, { fork: FORK, refuseFill: true })
   await start($)
   await flush()
@@ -491,10 +488,9 @@ test('a busy prompt box keeps the ticks and says so; dismiss clears the steps', 
   await flush()
   const ui = await $.ui.mount(band())
   await ui.press({ key: 'step-1' })
-  await ui.press({ key: 'steps-fill' })
   await flush()
   expect(toasts).toEqual(['The prompt box is busy; try again'])
-  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain('☑ Open the PR')
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain('2. Open the PR')
   await ui.press({ key: 'steps-dismiss' })
   expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).not.toContain('next steps')
   await ui.unmount()

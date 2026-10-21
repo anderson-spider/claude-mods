@@ -1,8 +1,8 @@
 The next steps in hooks/steps.ts are adapted from two MIT-licensed plugins:
 next-steps by Thariq Shihipar (the fork prompt, the text cleaning, the skill
 list and the reply's checks), published in anthropics/claude-plugins-community,
-and inline-next-steps by Shijie Li (ticking several steps and the numbered
-draft), published in shijieli708-ship-it/claude-mods.
+and inline-next-steps by Shijie Li (the steps on digit keys under the card),
+published in shijieli708-ship-it/claude-mods.
 
 MIT License
 
