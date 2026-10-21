@@ -15,8 +15,8 @@ A card above the prompt, laid out the same way in a terminal, on the desktop app
 
 - **Session**: the model, its effort and whether a turn runs with its time; the context gauge against the compaction window and the tokens the main session's requests sent and wrote; the turns, edits, errors and the tokens the agents used.
 - **Agents · running**: every agent the session spawned, of any type, with its type, model, time and effort, then its latest three tools, how many calls it made and how many failed, the prompt of its last request and its tokens.
-- **Agents · finished**: how each one ended (done, failed with its reason, or cancelled) and when; the latest six, then a count.
-- **Last 15 minutes**: a lane for the main session and one per agent type that worked, the most recent first, lit in one-minute buckets.
+- **Agents · finished**: one row per agent type, the most recently ended first: how its latest run ended (done, failed with its reason, or cancelled), when, and how many of that type ended when more than one.
+- **Last 15 minutes**: a lane for the main session and one for every agent type that worked, the most recent first, lit in one-minute buckets.
 
 An agent ends at its turn's end, or when the host's agent list shows it stopped. The panel is saved under the session in the plugin's store, so a restart or a resume brings it back for a week; an agent the host no longer runs then shows as cancelled. Like the card, it shows no money, prompt, task description, tool input or path: only figures and names, and a name that is not one shows as `?`.
 

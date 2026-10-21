@@ -1,6 +1,6 @@
 {
   "name": "session-hud",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "A card above the prompt: model, the repository, folder and branch, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors; when turned on, next steps to tick and put in the prompt; and /session-panel, a pane with every agent the session ran and the last 15 minutes.",
   "author": {
     "name": "anderson-spider"

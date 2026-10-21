@@ -22,10 +22,6 @@ export type PaneModel = { header: Piece[]; cards: Card[]; footer: Piece[]; motio
 
 /** Cells a card's border and padding take from the pane's width. */
 export const FRAME = 4
-/** Finished agents a card lists before it counts the rest. */
-const LISTED = 6
-/** Lanes the timeline draws: the main session and the agent types that worked most recently. */
-export const LANES = 6
 const BUCKETS = 15
 const LANE_LABEL = 14
 const NAME_MAX = 20
@@ -98,8 +94,11 @@ function markOf(a: SessionHudPanelAgent, v: PaneView): Piece {
   return a.status === 'done' ? p('●', 'ok') : a.status === 'failed' ? p('●', 'error') : p('–', 'dim')
 }
 
-/** An agent's row: mark, type in its tone, model and time, then its effort while it runs or how and when it ended. */
-function agentRow(a: SessionHudPanelAgent, v: PaneView, inner: number): Piece[] {
+/**
+ * An agent's row: mark, type in its tone, model and time, then its effort while it runs or how and when it ended, and
+ * how many times its type ended when more than once.
+ */
+function agentRow(a: SessionHudPanelAgent, v: PaneView, inner: number, runs = 1): Piece[] {
   const end = a.endedAt ?? v.now
   const head = [
     markOf(a, v), p(' '), toned(pad(cut(nameOf(a), NAME_MAX), NAME_MAX + 1), toneOf(nameOf(a)), true),
@@ -108,7 +107,7 @@ function agentRow(a: SessionHudPanelAgent, v: PaneView, inner: number): Piece[] 
   const reason = a.endReason ? (REASON.test(a.endReason) ? a.endReason : 'error') : undefined
   const what = a.status === 'running'
     ? (a.effort ? [p(a.effort, 'dim')] : [])
-    : [...(reason ? [p(reason, 'error'), p(' · ', 'dim')] : []), p(ago(v.now - end), 'dim')]
+    : [...(reason ? [p(reason, 'error'), p(' · ', 'dim')] : []), p(ago(v.now - end), 'dim'), ...(runs > 1 ? [p(` · ×${runs}`, 'dim')] : [])]
   return fit([...head, ...what], inner)
 }
 
@@ -124,14 +123,20 @@ function activityLine(a: SessionHudPanelAgent, inner: number): Piece[] | null {
   return fit([p('  └ ', 'dim'), ...joined(parts, p(' · ', 'dim')), ...calls, ...(figures.length ? [p('  '), ...joined(figures, p('  '))] : [])], inner)
 }
 
-function listed(agents: SessionHudPanelAgent[], row: (a: SessionHudPanelAgent) => Piece[]): Piece[][] {
-  const extra = agents.length - LISTED
-  return [...agents.slice(0, LISTED).map(row), ...(extra > 0 ? [[p(`  +${extra} more`, 'dim')]] : [])]
+/** One row per agent type, its latest ending first, with how many of its type ended. `finished` is newest first. */
+function byType(finished: SessionHudPanelAgent[], v: PaneView, inner: number): Piece[][] {
+  const types = new Map<string, { latest: SessionHudPanelAgent; runs: number }>()
+  for (const a of finished) {
+    const seen = types.get(nameOf(a))
+    if (seen) seen.runs++
+    else types.set(nameOf(a), { latest: a, runs: 1 })
+  }
+  return [...types.values()].map(({ latest, runs }) => agentRow(latest, v, inner, runs))
 }
 
 /**
- * A lane for the main session and one per agent type that worked in the last 15 minutes, the most recent first up to
- * `LANES`, in one-minute buckets lit where it worked, and an axis.
+ * A lane for the main session and one per agent type that worked in the last 15 minutes, the most recent first, in
+ * one-minute buckets lit where it worked, and an axis.
  */
 function timelineLines(v: PaneView, inner: number): Piece[][] {
   const from = v.now - TIMELINE_MS
@@ -142,7 +147,7 @@ function timelineLines(v: PaneView, inner: number): Piece[][] {
   for (const turn of v.panel.main.turns) add(MAIN, turn)
   if (v.card.turnStartedAt !== undefined) add(MAIN, [v.card.turnStartedAt, v.now])
   for (const a of [...v.panel.agents].sort((x, y) => (y.endedAt ?? v.now) - (x.endedAt ?? v.now))) add(nameOf(a), [a.startedAt, a.endedAt ?? v.now])
-  const lanes = [...spans.keys()].slice(0, LANES)
+  const lanes = [...spans.keys()]
   const rows = lanes.map(lane => {
     const runs: Piece[] = []
     for (let i = 0; i < BUCKETS; i++) {
@@ -176,7 +181,7 @@ export function paneModel(v: PaneView): PaneModel {
     const lines = running.length ? running.flatMap(a => [agentRow(a, v, inner), ...[activityLine(a, inner)].filter(line => line !== null)]) : [[p('No agents yet', 'dim')]]
     cards.push(card('running', 'Agents · running', lines, String(running.length)))
   }
-  if (finished.length) cards.push(card('finished', 'Agents · finished', listed(finished, a => agentRow(a, v, inner)), String(finished.length)))
+  if (finished.length) cards.push(card('finished', 'Agents · finished', byType(finished, v, inner), String(finished.length)))
   const timeline = timelineLines(v, inner)
   if (timeline.length) cards.push(card('timeline', 'Last 15 minutes', timeline))
   // Short of rows, the least current cards go.
