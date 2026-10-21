@@ -53,9 +53,20 @@ export type SessionHudCard = {
   workspace?: SessionHudWorkspace
 }
 
+/** One next step: the label its checkbox shows and the prompt it puts in the prompt box, both cleaned. */
+export type SessionHudStep = { label: string; prompt: string }
+
+/** The next steps under the card: none, a fork asked after the main turn `turnId`, or the steps it offered and the ones ticked, by index. */
+export type SessionHudSteps =
+  | { kind: 'hidden' }
+  | { kind: 'loading'; turnId: string }
+  | { kind: 'offer'; steps: SessionHudStep[]; picked: number[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'session-hud': {
+      /** The next steps, when the `nextSteps` option is on. */
+      steps: SessionHudSteps
       card: SessionHudCard
       /** The clock reading, in epoch milliseconds, the time left and the pace are drawn from. */
       now: number

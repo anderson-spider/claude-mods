@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, Timer } from 'claude-code'
-import type { SessionHudCard } from '../types'
+import type { SessionHudCard, SessionHudStep, SessionHudSteps } from '../types'
 import { EMPTY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, located, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from './card'
 import { BRANCH, REV_PARSE, workspaceOf } from './workspace'
 import type { Measured } from './card'
@@ -8,12 +8,14 @@ import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
 import { layoutView } from './layout'
 import type { Drawing, Piece } from './layout'
+import { HIDDEN, draftOf, earnsSteps, forkPrompt, isCommand, offered, parseSteps, skillList, toggled } from './steps'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
 const card = atom({ plugin: 'session-hud', key: 'card' } as const, EMPTY)
 const nowAtom = atom({ plugin: 'session-hud', key: 'now' } as const, 0)
 const paletteAtom = atom({ plugin: 'session-hud', key: 'palette' } as const, 'theme' as Palette)
+const stepsAtom = atom({ plugin: 'session-hud', key: 'steps' } as const, HIDDEN)
 
 /** The time left in a window is drawn in minutes: a tick every 30 s keeps it current without redrawing on every second. */
 const TICK_MS = 30_000
@@ -90,9 +92,45 @@ async function prime($: Dollar, held: Held): Promise<void> {
   await readWindow($)
 }
 
+/**
+ * Asks a fork of the session, which shares its prompt cache, for the likely next prompts after the main turn `turnId`,
+ * handing it the session's skills and slash commands; the steps are offered only if no other turn started meanwhile.
+ */
+async function suggest($: Dollar, turnId: string): Promise<void> {
+  await update($, stepsAtom, (): SessionHudSteps => ({ kind: 'loading', turnId }))
+  let found: SessionHudStep[] = []
+  try {
+    // Without the list the fork still suggests; slash prompts then go unchecked.
+    const commands = await $.command.list().catch(() => null)
+    const known = commands === null ? null : new Set(commands.map(command => command.name))
+    const reply = await $.model.fork({ prompt: forkPrompt(commands === null ? '' : skillList(commands)) })
+    found = reply.isAnswered ? parseSteps(reply.text, known) : []
+  } finally {
+    const shown = await update($, stepsAtom, current => offered(current, turnId, found))
+    const first = shown.kind === 'offer' ? shown.steps[0] : undefined
+    if (first) void $.prompt.suggest({ text: first.prompt }).catch(() => undefined)
+  }
+}
+
+/** Puts the ticked steps in the prompt box as a draft, never sent; where the surface draws its own composer, on the clipboard. */
+async function fill($: Dollar, surface: string): Promise<void> {
+  const text = draftOf(await read($, stepsAtom))
+  if (text === '') return
+  const filled = await $.prompt.fill({ text })
+  if (!filled.isFilled) {
+    if (filled.refusal !== 'no_composer') return $.ui.toast('The prompt box is busy; try again')
+    const copied = await $.ui.copy({ text, surface: surface as never })
+    if (!copied.isCopied) return $.ui.toast('Could not put the steps in the prompt')
+    $.ui.toast('Copied; paste it into the prompt')
+  }
+  await update($, stepsAtom, () => HIDDEN)
+}
+
 export const register: Register = (on, options) => {
   const held: Held = {}
   const ttl = ttlOf((options as Record<string, unknown> | undefined)?.cacheTtl)
+  // Off unless set to true: a fork after every main turn costs about one short reply.
+  const suggests = (options as Record<string, unknown> | undefined)?.nextSteps === true
 
   on('session.start', {}, async ($, e, next) => {
     const started = await next(e)
@@ -121,6 +159,8 @@ export const register: Register = (on, options) => {
       void observe($, async () => { await update($, card, current => agentBegan(current, e.agentId)) })
       return next(e)
     }
+    // A new turn makes the steps stale, and drops a fork still answering.
+    void observe($, async () => { await update($, stepsAtom, () => HIDDEN) })
     // The context is cleared before the clock is read, so a step that lands meanwhile is not wiped.
     void observe($, async () => {
       await update($, card, current => began(current))
@@ -155,6 +195,12 @@ export const register: Register = (on, options) => {
       void observe($, () => locate($))
     } else void observe($, async () => { await update($, card, current => agentEnded(current, e.agentId)) })
     return next(e)
+  })
+  // A main turn that ends in a full answer asks the fork for next steps, detached, so the completion never waits on it.
+  on('turn.complete', {}, async ($, e, next) => {
+    const result = await next(e)
+    if (suggests && e.agentId === undefined && earnsSteps(e.reason, e.answer)) void observe($, () => suggest($, e.turnId))
+    return result
   })
   // A started agent runs on the model the spawn answers, as the type it asked for; the answer passes unchanged, and a refused spawn or one with no `agentId` is not tracked.
   // The input names no remote run: a remote workflow agent (internal builds only) that answers with an id stays until a list shows it ended.
@@ -205,7 +251,7 @@ export const register: Register = (on, options) => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
     try {
-      const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
+      const [shown, time, palette, steps] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom), read($, stepsAtom)])
       const terminal = e.surface === 'terminal'
       const drawnCard = (shown.cacheTtl === undefined && ttl ? { ...shown, cacheTtl: ttl } : shown) as SessionHudCard
       // The card's own turn says it is the main session's; the host's `isWorking` drops one whose completion never reached the card.
@@ -213,13 +259,42 @@ export const register: Register = (on, options) => {
       const lines = layoutView({ card: drawnCard, now: time, working, palette, draw: terminal ? 'cells' : 'svg' })
       if (!lines.length) return below
       const ui = $.ui.resolve(e)
-      const { Box, Text } = ui
+      const { Box, Text, Button } = ui
       // Only a graphical surface gets drawings; the terminal, which has no `Svg`, draws its bars as text.
       const drawing = (part: Drawing, key: string) => ('Svg' in ui ? <ui.Svg key={key} source={part.source} alt={part.alt} width={part.width} height={part.height} /> : null)
       // In a terminal too narrow for a whole group, the group shrinks and its text is cut at the edge instead of breaking the frame.
       const piece = (part: Piece, key: string) => ('text' in part
         ? <Text key={key} {...paint(palette, part.style)} {...(terminal ? { wrap: 'truncate-end' as const } : {})}>{part.text}</Text>
         : drawing(part, key))
+      // The next steps under the card's lines: a digit ticks one (from an empty prompt box), p puts the ticked ones in
+      // the prompt box, 0 dismisses. A slash command is drawn in the sent colour, apart from a prompt in prose.
+      const stepsSection = () => {
+        if (steps.kind === 'hidden') return null
+        const head = <Text key="steps-head" {...paint(palette, 'secondary')}>{steps.kind === 'loading' ? 'next steps…' : 'next steps'}</Text>
+        if (steps.kind === 'loading') return <Box key="steps" flexDirection="column" marginTop={1}>{head}</Box>
+        const row = (step: SessionHudStep, i: number) => {
+          const ticked = steps.picked.includes(i)
+          const style = isCommand(step) ? 'sent' : ticked ? 'plain' : 'secondary'
+          return <Button key={`step-${i}`} hotkey={String(i + 1)} plain onPress={() => update($, stepsAtom, current => toggled(current, i))}>
+            <Text {...paint(palette, style)}>{`${ticked ? '☑' : '☐'} ${step.label}`}</Text>
+          </Button>
+        }
+        const half = Math.ceil(steps.steps.length / 2)
+        const count = steps.picked.length
+        return <Box key="steps" flexDirection="column" marginTop={1}>
+          {head}
+          <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+            <Box flexDirection="column">{steps.steps.slice(0, half).map((step, i) => row(step, i))}</Box>
+            <Box flexDirection="column">{steps.steps.slice(half).map((step, i) => row(step, i + half))}</Box>
+          </Box>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={2} alignItems="center">
+            {count > 0
+              ? <Button key="steps-fill" hotkey="p" variant="primary" label={count === 1 ? 'Put in prompt' : `Put ${count} in prompt`} onPress={() => fill($, e.surface)} />
+              : <Text key="steps-hint" {...paint(palette, 'secondary')}>tick with 1–{steps.steps.length}, then p puts them in the prompt</Text>}
+            <Button key="steps-dismiss" hotkey="0" plain dimColor label="dismiss" onPress={() => update($, stepsAtom, () => HIDDEN)} />
+          </Box>
+        </Box>
+      }
       // Each group wraps to the next row whole, so a narrow card breaks between parts, never inside one.
       const drawn = <Box {...(terminal ? { width: e.props.bodyColumns } : {})} flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1}>
         {lines.map((groups, at) => <Box key={`line-${at}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} marginTop={at === lines.length - 1 && at > 0 ? 1 : 0}>
@@ -227,6 +302,7 @@ export const register: Register = (on, options) => {
             ? <Box key={`g-${i}`} flexGrow={1} />
             : <Box key={`g-${i}`} flexDirection="row" alignItems="center" flexShrink={terminal ? 1 : 0}>{group.map((part, j) => piece(part, `p-${i}-${j}`))}</Box>)}
         </Box>)}
+        {e.props.isWorking ? null : stepsSection()}
       </Box>
       return <Box flexDirection="column">{drawn}{below}</Box>
     } catch {
