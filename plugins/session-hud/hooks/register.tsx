@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, Timer } from 'claude-code'
 import type { SessionHudCard } from '../types'
-import { EMPTY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from './card'
+import { EMPTY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, located, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from './card'
+import { BRANCH, REV_PARSE, workspaceOf } from './workspace'
 import type { Measured } from './card'
 import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
@@ -16,6 +17,8 @@ const paletteAtom = atom({ plugin: 'session-hud', key: 'palette' } as const, 'th
 
 /** The time left in a window is drawn in minutes: a tick every 30 s keeps it current without redrawing on every second. */
 const TICK_MS = 30_000
+/** A git reading that takes longer than this is dropped; the card keeps the last one. */
+const GIT_TIMEOUT_MS = 5_000
 
 /** What the module keeps between events: the clock's timers. */
 type Held = { ticker?: Timer; fast?: Timer }
@@ -37,11 +40,25 @@ async function reconcile($: Dollar): Promise<void> {
   await update($, card, current => reconciled(current, list))
 }
 
+/** Git's answer for the session's directory, or undefined when it is not a repository or git fails; read-only and lock-free. */
+async function git($: Dollar, cwd: string, args: readonly string[]): Promise<string | undefined> {
+  const run = await $.process.run(['git', '--no-optional-locks', ...args], { cwd, timeoutMs: GIT_TIMEOUT_MS }).catch(() => undefined)
+  return run?.exitCode === 0 ? run.stdout : undefined
+}
+
+/** Where the session works: its directory's repository, folder and branch, read again whenever a checkout, a `cd` or a worktree move could have changed them. */
+async function locate($: Dollar): Promise<void> {
+  const cwd = await $.session.cwd()
+  const [paths, branch] = await Promise.all([git($, cwd, REV_PARSE), git($, cwd, BRANCH)])
+  await update($, card, current => located(current, workspaceOf(cwd, paths, branch)))
+}
+
 function ensureTicker($: Dollar, held: Held): void {
   if (held.ticker) return
   held.ticker = $.clock.every(TICK_MS, () => {
     void observe($, async () => { const time = await $.clock.now(); await update($, nowAtom, () => time) })
     void observe($, () => reconcile($))
+    void observe($, () => locate($))
   })
 }
 
@@ -80,6 +97,7 @@ export const register: Register = (on, options) => {
   on('session.start', {}, async ($, e, next) => {
     const started = await next(e)
     void observe($, async () => { ensureTicker($, held); await prime($, held) })
+    void observe($, () => locate($))
     return started
   })
   on('session.end', {}, (_$, e, next) => {
@@ -133,6 +151,8 @@ export const register: Register = (on, options) => {
       stopFast(held)
       void observe($, async () => { await update($, card, current => completed(current, e.durationMs)) })
       void observe($, () => reconcile($))
+      // The turn may have checked out a branch or entered a worktree.
+      void observe($, () => locate($))
     } else void observe($, async () => { await update($, card, current => agentEnded(current, e.agentId)) })
     return next(e)
   })
@@ -159,6 +179,12 @@ export const register: Register = (on, options) => {
   on('classic.PostCompact', async ($, e, next) => {
     const result = await next(e)
     if (e.agent_id === undefined) void observe($, async () => { await update($, card, current => compactedNow(current)) })
+    return result
+  })
+  // A directory change (`/cd`, a worktree move) moves the workspace; the event passes unchanged.
+  on('classic.CwdChanged', async ($, e, next) => {
+    const result = await next(e)
+    void observe($, () => locate($))
     return result
   })
   // A theme change repaints the card; the change itself is the person's and passes unchanged.

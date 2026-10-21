@@ -9,6 +9,9 @@ export type SessionHudTurn = { before: number; after: number; output: number; co
 /** A subagent or teammate running now: its id (`agent.spawn`'s `agentId`) and, once reported, the model it runs on, the effort its last step asked for and the agent type it was spawned as. */
 export type SessionHudAgent = { id: string; model?: string; effort?: string; type?: string }
 
+/** Where the session works, by name only: the repository (or the folder outside one), the folder within it, the branch and whether it is a linked worktree. */
+export type SessionHudWorkspace = { repo: string; sub?: string; branch?: string; worktree?: true }
+
 /** Everything the card draws, observed after the fact; a field the host has not reported yet is absent. */
 export type SessionHudCard = {
   /** The model id the main session's last response reported, or the session's model before one. */
@@ -46,6 +49,8 @@ export type SessionHudCard = {
   agents: SessionHudAgent[]
   /** The tokens every subagent and teammate request processed since the plugin loaded (input, cache read and written, output); absent before one reported usage. */
   agentTokens?: number
+  /** Where the session works, as git last answered for its directory; absent before the first reading. */
+  workspace?: SessionHudWorkspace
 }
 
 declare module 'claude-code' {
