@@ -1,17 +1,17 @@
 import { expect, test } from 'claude-code/testing'
-import { cardLines, rail, railHead, terminalLines } from '../hooks/cards'
-import type { Card, PaneModel } from '../hooks/pane'
-import { p } from '../hooks/text'
-import type { Piece } from '../hooks/text'
+import { cardLines, rail, railHead, terminalLines } from '../../hooks/panel/cards'
+import type { Card, PaneModel } from '../../hooks/panel/model'
+import { p } from '../../hooks/panel/text'
+import type { Piece } from '../../hooks/panel/text'
 
 const text = (line: Piece[]) => line.map(piece => piece.text).join('')
-const CARD: Card = { key: 'plan', tone: 'suggestion', title: 'Plan', count: '1/4', aside: [p('▰▱ 25%', 'dim')], lines: [[p('✓ T1 Done', 'ok')], []] }
+const CARD: Card = { key: 'finished', tone: 'suggestion', title: 'Plan', count: '1/4', aside: [p('▰▱ 25%', 'dim')], lines: [[p('● Explore', 'ok')], []] }
 
 test('a card is a rounded border in its tone, with the title, count and aside in its top edge, every line as wide as the pane', () => {
   const lines = cardLines(CARD, 30)
   expect(lines.map(text)).toEqual([
     '╭─ Plan 1/4 ───────── ▰▱ 25% ╮',
-    '│ ✓ T1 Done                  │',
+    '│ ● Explore                  │',
     '│                            │',
     '╰────────────────────────────╯',
   ])

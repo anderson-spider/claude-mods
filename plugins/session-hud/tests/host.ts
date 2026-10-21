@@ -1,4 +1,5 @@
-// The host fake the plugin's tests share: the session's model, usage and theme, the clock, the agents, and the band to mount.
+// The host fake the plugin's tests share: the session's model, usage and theme, the clock, the agents, the store and
+// panes, and the band and the session panel to mount.
 import type { AgentInfo, On, RenderElement } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
@@ -81,7 +82,21 @@ export function world(on: On, opts: { theme?: string; window?: number; denySpawn
   on('prompt.fill', (_$, e) => (opts.refuseFill ? { isFilled: false } : (fills.push(e.text), { isFilled: true })) as never)
   on('prompt.suggest', (_$, e) => (suggested.push(e.text), { isShown: true }) as never)
   on('ui.toast', (_$, e) => (toasts.push(e.text), { value: undefined }))
-  return { clock, roster, place, asked, fills, suggested, toasts }
+  // The session panel: the session's id, the plugin's store, the panes it opened and the commands it registered.
+  const session = { id: 's1' }
+  const disk = new Map<string, unknown>()
+  const opened: string[] = []
+  const commands: string[] = []
+  on('session.id', () => ({ value: session.id }) as never)
+  on('store.get', (_$, e) => ({ value: disk.get(e.key) }) as never)
+  on('store.set', (_$, e) => (disk.set(e.key, JSON.parse(JSON.stringify(e.value))), { value: undefined }) as never)
+  on('store.delete', (_$, e) => (disk.delete(e.key), { value: undefined }) as never)
+  on('store.keys', () => ({ value: [...disk.keys()] }) as never)
+  on('command.register', (_$, e) => (commands.push(e.name), { value: undefined }) as never)
+  on('ui.open', (_$, e) => (opened.includes(e.id) || opened.push(e.id), { value: { isPlaced: true } }) as never)
+  on('ui.close', (_$, e) => (opened.splice(opened.indexOf(e.id), 1), { value: undefined }) as never)
+  on('ui.panes', () => ({ value: opened.map(pane => ({ id: pane, title: 'Session panel' })) }) as never)
+  return { clock, roster, place, asked, fills, suggested, toasts, session, disk, opened, commands }
 }
 
 /** The band's tree beneath the card. */
@@ -97,6 +112,15 @@ export const band = (columns = 110, hasSurvey = false, isWorking = false) => ({
   plugin: 'session-hud', component: 'AbovePrompt', surface: 'terminal',
   props: { hasSurvey, isWorking, maxRows: 20, bodyColumns: columns, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }) as never
+
+/** The session panel as a pane on `surface`, `columns` wide. */
+export const pane = (columns = 100, surface: 'terminal' | 'desktop' = 'terminal') => ({
+  plugin: 'session-hud', component: 'Pane', surface, requestId: 'session-panel',
+  props: { title: 'Session panel', isFocused: true, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+}) as never
+
+/** The text a mounted surface drew, one Text per line. */
+export const drawn = async (ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }) => (await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')
 
 /** A main-session step (or a subagent's, with `agentId`) on `model` at `effort`, run to its result. */
 export const step = async ($: Engine, agentId?: string, model = 'claude-opus-5-5', effort = 'medium') => {

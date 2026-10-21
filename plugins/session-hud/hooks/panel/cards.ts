@@ -1,7 +1,7 @@
-// The terminal's drawing of the pane's cards, line by line: each card in a rounded border of its tone with its title,
-// count and aside set in the top border, and a rail between cards; the rail into the running card moves while agents
-// run. Pure.
-import type { Card, PaneModel } from './pane'
+// The terminal's drawing of the session panel's cards, line by line: each card in a rounded border of its tone with its
+// title, count and aside set in the top border, and a rail between cards; the rail into the running card moves while
+// agents run. Pure.
+import type { Card, PaneModel } from './model'
 import { cells, cut, p, toned } from './text'
 import type { Piece, Tone } from './text'
 

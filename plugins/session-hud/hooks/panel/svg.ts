@@ -1,8 +1,8 @@
-// The desktop's drawing of the pane's cards as one SVG: each card a plate with only a stroke in its tone, the title in a
-// gap of its top edge, its lines on the terminal's grid of cells (every run of text held to its cells' width), gauges,
-// attempt blocks and the timeline as shapes, and rails between plates. The rail into the running card moves (SMIL) while
-// agents run. Colours follow the system's light or dark scheme. Pure.
-import type { Card, PaneModel } from './pane'
+// The desktop's drawing of the session panel's cards as one SVG: each card a plate with only a stroke in its tone, the
+// title in a gap of its top edge, its lines on the terminal's grid of cells (every run of text held to its cells'
+// width), gauges and the timeline as shapes, and rails between plates. The rail into the running card moves (SMIL)
+// while agents run. Colours follow the system's light or dark scheme. Pure.
+import type { Card, PaneModel } from './model'
 import { cells, cut } from './text'
 import type { Piece, Style, Tone } from './text'
 
@@ -41,15 +41,13 @@ function text(piece: Piece, col: number, row: number): string {
   return `<text x="${n(col * CELL)}" y="${n(row * ROW + ROW * 0.7)}" class="f-${colourOf(piece)}${bold ? ' b' : ''}"${fit}>${esc(piece.text)}</text>`
 }
 
-/** A gauge cell, an attempt block, a timeline bucket or a planned dot as a shape; null for a glyph drawn as text. */
+/** A gauge cell, a timeline bucket or a dot as a shape; null for a glyph drawn as text. */
 function shape(ch: string, colour: Colour, col: number, row: number): string | null {
   const x = col * CELL
   const top = row * ROW
   const mid = top + ROW / 2
   switch (ch) {
     case '▰': case '▱': return `<rect x="${n(x + 1)}" y="${n(top + 5)}" width="${n(CELL - 2)}" height="${ROW - 10}" rx="1.5" class="f-${colour}"/>`
-    case '▮': return `<rect x="${n(x + 0.5)}" y="${n(top + 3)}" width="${n(CELL - 1)}" height="${ROW - 6}" rx="2" class="f-${colour}"/>`
-    case '▯': return `<rect x="${n(x + 1)}" y="${n(top + 3.5)}" width="${n(CELL - 2)}" height="${ROW - 7}" rx="2" fill="none" stroke-width="1.2" class="s-${colour}"/>`
     case '━': return `<rect x="${n(x)}" y="${n(mid - 2.5)}" width="${n(CELL)}" height="5" class="f-${colour}"/>`
     case '·': return `<rect x="${n(x)}" y="${n(mid - 1)}" width="${n(CELL)}" height="2" opacity="0.6" class="f-${colour}"/>`
     case '●': return `<circle cx="${n(x + CELL / 2)}" cy="${n(mid)}" r="3.5" class="f-${colour}"/>`
@@ -64,7 +62,7 @@ function stretch(ch: string, colour: Colour, col: number, length: number, row: n
   return `<rect x="${n(col * CELL)}" y="${n(mid - h / 2)}" width="${n(length * CELL)}" height="${h}"${opacity} class="f-${colour}"/>`
 }
 
-/** A line of pieces from a cell on: bars and blocks as shapes, the rest as text. */
+/** A line of pieces from a cell on: bars as shapes, the rest as text. */
 function line(pieces: Piece[], col: number, row: number): string {
   let at = col
   let out = ''

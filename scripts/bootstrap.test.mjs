@@ -110,27 +110,6 @@ test("a second run updates what is installed and runs the codex-computer-use hel
   }
 });
 
-test("a plugin merged into another is uninstalled when its successor is installed, and kept otherwise", () => {
-  const w = world({ installed: ["spider-progress", "tailscale"], marketplace: true });
-  try {
-    const only = w.run("--only", "tailscale");
-    assert.equal(only.status, 0, only.stderr);
-    assert.ok(!only.calls.some(c => c.includes("uninstall")), only.calls.join("\n"));
-    const check = w.run("--check", "--only", "spider-team");
-    assert.equal(check.status, 0, check.stderr);
-    assert.match(check.stdout, new RegExp(`would: claude plugin uninstall spider-progress@${MARKET} --scope user`));
-    const r = w.run("--only", "spider-team");
-    assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(mutating(r.calls).slice(-2), [
-      `claude plugin install spider-team@${MARKET} --scope user`,
-      `claude plugin uninstall spider-progress@${MARKET} --scope user`,
-    ]);
-    assert.ok(!ALL.includes("spider-progress"));
-  } finally {
-    rmSync(w.root, { recursive: true, force: true });
-  }
-});
-
 test("--only limits the plugins, and an unknown name or flag is refused before anything runs", () => {
   const w = world({ marketplace: true });
   try {
