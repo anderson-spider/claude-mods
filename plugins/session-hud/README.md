@@ -9,6 +9,17 @@ A card above the prompt, laid out the same way in a terminal, on the desktop app
 5. The last turn's duration, the turns so far, and the main session's edits (successful `Write`, `Edit` and `NotebookEdit` calls) and errors (failed tool calls). The card shows no money.
 6. With the `nextSteps` option on, next steps under a dashed line: up to four prompts you are likely to send next, numbered. Press a digit from an empty prompt box (or click) to put that one in the prompt box for you to edit and send, `0` to dismiss; the first also shows as the prompt box's dim ghost text, so Tab takes it. A step that runs one of the session's skills or slash commands (`/code-review high`) is drawn in blue. They are hidden while a turn runs and cleared when the next one starts.
 
+## Session panel
+
+`/session-panel` toggles a pane beside the conversation (`open`, `close`, or `clear` to forget what it shows). It opens only on that command. As cards, in a terminal as bordered lines and on the desktop as one drawing:
+
+- **Session**: the model, its effort and whether a turn runs with its time; the context gauge against the compaction window and the tokens the main session's requests sent and wrote; the turns, edits, errors and the tokens the agents used.
+- **Agents · running**: every agent the session spawned, of any type, with its type, model, time and effort, then its latest three tools, how many calls it made and how many failed, the prompt of its last request and its tokens.
+- **Agents · finished**: how each one ended (done, failed with its reason, or cancelled) and when; the latest six, then a count.
+- **Last 15 minutes**: a lane for the main session and one per agent type that worked, the most recent first, lit in one-minute buckets.
+
+An agent ends at its turn's end, or when the host's agent list shows it stopped. The panel is saved under the session in the plugin's store, so a restart or a resume brings it back for a week; an agent the host no longer runs then shows as cancelled. Like the card, it shows no money, prompt, task description, tool input or path: only figures and names, and a name that is not one shows as `?`.
+
 The bars keep a fixed size whatever the card's width: 96 pixels drawn as SVG on the desktop, twelve cells of text in a terminal. A narrow card wraps between the parts of a line, never inside one; in a terminal, a part wider than the whole card is cut at the edge.
 
 ```text
@@ -23,8 +34,8 @@ Under a dark or automatic theme the card uses the design's colours; under a ligh
 
 ## Privacy
 
-Everything comes from the session itself: the host's usage figures and token counts, the model that answered, the cache lifetime a model switch reports, the main session's tool results (only whether an edit succeeded or a call failed), the ids, agent types, models, efforts and token counts of the agents the session starts and the host's agent list (whether each one is still running, and its type), and what two read-only git commands (`rev-parse` and `branch --show-current`) answer for the session's directory. The task description an agent was given never reaches the card. No prompt, answer or tool input reaches the screen; of the session's directory only the repository's and folders' names and the branch do, never a whole path. Nothing is sent anywhere, except with `nextSteps` on: then the fork sends the session's own conversation, with the question and the session's skill and command names and descriptions, to the session's model as one more request, and the steps it writes back (model text, stripped of escapes and hidden characters) are the only text of the conversation the card shows.
+Everything comes from the session itself: the host's usage figures and token counts, the model that answered, the cache lifetime a model switch reports, the main session's tool results (only whether an edit succeeded or a call failed), the ids, agent types, models, efforts and token counts of the agents the session starts, the names of the tools they call and whether each call failed, how their turns ended, and the host's agent list (whether each one is still running, and its type), and what two read-only git commands (`rev-parse` and `branch --show-current`) answer for the session's directory. The task description an agent was given never reaches the card. No prompt, answer or tool input reaches the screen; of the session's directory only the repository's and folders' names and the branch do, never a whole path. The session panel keeps those figures and names in the plugin's store on this machine, one entry per session, pruned after a week or past the 20 newest sessions. Nothing is sent anywhere, except with `nextSteps` on: then the fork sends the session's own conversation, with the question and the session's skill and command names and descriptions, to the session's model as one more request, and the steps it writes back (model text, stripped of escapes and hidden characters) are the only text of the conversation the card shows.
 
 ## Tests
 
-Pure tests call `hooks/usage.ts`, `hooks/card.ts`, `hooks/view.ts`, `hooks/layout.ts`, `hooks/palette.ts`, `hooks/workspace.ts` and `hooks/steps.ts` directly; host tests run the plugin against a fake host (`tests/host.ts`, git included) with no network. Checks and editing pointers: [AGENTS.md](AGENTS.md).
+Pure tests call `hooks/usage.ts`, `hooks/card.ts`, `hooks/view.ts`, `hooks/layout.ts`, `hooks/palette.ts`, `hooks/workspace.ts`, `hooks/steps.ts` and the panel's modules in `hooks/panel/` directly; host tests run the plugin against a fake host (`tests/host.ts`, git included) with no network. Checks and editing pointers: [AGENTS.md](AGENTS.md).
