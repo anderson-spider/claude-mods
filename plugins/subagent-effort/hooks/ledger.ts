@@ -17,13 +17,14 @@ const ALL_EFFORTS: readonly Effort[] = [...EFFORTS, 'max']
 
 /**
  * `received` is the effort the call came with, `effort` the one the agent runs with; null is the agent's usual effort.
- * `cap` is the agent type's cap when it lowered Jev's pick (`level` stays Jev's own), else null. The
+ * `cap` is the agent type's cap when it lowered Jev's pick (`level` stays Jev's own), else null. `fullLevel` is the level
+ * Jev gave the task read up to FULL_CHARS, beside `level` from its head; null when no comparison was asked or it failed. The
  * Jev fields are the routing call's own: its latency, the tokens it reported and their estimated cost, apart from the
  * subagent's duration and tokens on the outcome line.
  */
 export type DecisionLine = {
   v: 1; kind: 'decision'; calibration: number; ts: string; tool_use_id: string | null; agentType: string | null; briefChars: number | null
-  source: Source; received: Effort | null; effort: Effort | null; cap: Effort | null; level: number | null; top: number | null; jevReason: string | null; jevMs: number | null
+  source: Source; received: Effort | null; effort: Effort | null; cap: Effort | null; level: number | null; fullLevel: number | null; top: number | null; jevReason: string | null; jevMs: number | null
   jevTokens: { input: number; output: number } | null; jevCostUsd: number | null
 }
 export type OutcomeLine = {
@@ -50,7 +51,7 @@ export type DecisionInput = { ts: string; toolUseId: string | undefined; agentTy
 export function decisionLine({ ts, toolUseId, agentType, briefChars, source, received, effort, cap = null, choice }: DecisionInput): DecisionLine {
   return {
     v: 1, kind: 'decision', calibration: CALIBRATION, ts, tool_use_id: word(toolUseId, 80), agentType: word(agentType, 80), briefChars: maybeCount(briefChars),
-    source, received: effortOf(received), effort: effortOf(effort), cap: effortOf(cap), level: maybeCount(choice?.level), top: typeof choice?.top === 'number' && Number.isFinite(choice.top) ? round2(choice.top) : null,
+    source, received: effortOf(received), effort: effortOf(effort), cap: effortOf(cap), level: maybeCount(choice?.level), fullLevel: maybeCount(choice?.fullLevel), top: typeof choice?.top === 'number' && Number.isFinite(choice.top) ? round2(choice.top) : null,
     jevReason: word(choice?.jevReason, 40), jevMs: maybeCount(choice?.jevMs), ...jevSpend(choice?.jevTokens),
   }
 }
@@ -181,6 +182,8 @@ export type JevSpend = { asked: number; medianMs: number | null; inputTokens: nu
 export type Summary = {
   decisions: number; bySource: Record<Source, number>; overridden: number; capped: number; offReasons: Record<string, number>; olderCalibration: number
   jev: JevSpend; groups: Group[]; byType: Group[]; notRun: number; olderRuns: number
+  /** This calibration's decisions with both levels: the head's level equal to, below or above the full brief's. */
+  headVsFull: { same: number; lower: number; higher: number }
 }
 
 /** An error with no duration and no tokens: the call failed before its agent ran. */
@@ -204,6 +207,7 @@ export function summarize(lines: Line[]): Summary {
   let decisions = 0, olderCalibration = 0, overridden = 0, capped = 0, notRun = 0, olderRuns = 0
   const jevMs: number[] = [], jev: JevSpend = { asked: 0, medianMs: null, inputTokens: 0, outputTokens: 0, costUsd: 0 }
   const groups = new Map<string, OutcomeLine[]>(), byType = new Map<string, OutcomeLine[]>()
+  const headVsFull = { same: 0, lower: 0, higher: 0 }
   const older = new Set(lines.flatMap(line => (line.kind === 'decision' && line.calibration !== CALIBRATION && line.tool_use_id ? [line.tool_use_id] : [])))
   for (const line of lines) {
     if (line.kind === 'decision') {
@@ -212,6 +216,9 @@ export function summarize(lines: Line[]): Summary {
       if (line.calibration !== CALIBRATION) olderCalibration++
       if (line.source === 'jev' && line.received && line.received !== line.effort) overridden++
       if (line.cap) capped++
+      if (line.calibration === CALIBRATION && typeof line.level === 'number' && typeof line.fullLevel === 'number') {
+        headVsFull[line.level === line.fullLevel ? 'same' : line.level < line.fullLevel ? 'lower' : 'higher']++
+      }
       if (line.jevMs !== null) { jev.asked++; jevMs.push(line.jevMs) }
       if (line.jevTokens) { jev.inputTokens += line.jevTokens.input; jev.outputTokens += line.jevTokens.output; jev.costUsd += line.jevCostUsd ?? 0 }
       if (line.source === 'off') offReasons[line.jevReason ?? '?'] = (offReasons[line.jevReason ?? '?'] ?? 0) + 1
@@ -226,7 +233,7 @@ export function summarize(lines: Line[]): Summary {
   }
   return {
     decisions, bySource, overridden, capped, offReasons, olderCalibration, jev: { ...jev, medianMs: median(jevMs), costUsd: Math.round(jev.costUsd * 1e9) / 1e9 },
-    groups: grouped(groups), byType: grouped(byType), notRun, olderRuns,
+    groups: grouped(groups), byType: grouped(byType), notRun, olderRuns, headVsFull,
   }
 }
 
@@ -248,10 +255,12 @@ export function formatSummary(s: Summary): string {
   const head = `${s.decisions} decisions: Jev ${s.bySource.jev}${notes.length ? ` (${notes.join(', ')})` : ''}, Jev off ${s.bySource.off}${off ? ` (${off})` : ''}${s.olderCalibration ? `; ${s.olderCalibration} from an older calibration` : ''}.`
   const asked = s.jev.asked ? [`Jev calls: ${s.jev.asked}, median ${s.jev.medianMs === null ? '?' : `${Math.round(s.jev.medianMs)}ms`}, ${tokens(s.jev.inputTokens)} input and ${tokens(s.jev.outputTokens)} output tokens, about ${usd(s.jev.costUsd)} (estimated).`] : []
   const row = (g: Group) => `${g.key}: ${g.runs} runs${g.failures ? `, ${g.failures} failed` : ''}, median ${seconds(g.medianMs)} and ${tokens(g.medianTokens)} tokens`
+  const { same, lower, higher } = s.headVsFull
+  const compared = same + lower + higher ? [`Head vs full brief: ${same} same, ${lower} lower with the head, ${higher} higher.`] : []
   const types = s.byType.length ? ['By agent type:', ...s.byType.map(g => `  ${row(g)}`)] : []
   const apart = [
     ...(s.notRun ? [`${s.notRun} calls never ran (an error before the agent started), left out.`] : []),
     ...(s.olderRuns ? [`${s.olderRuns} runs from an older calibration, left out.`] : []),
   ]
-  return [head, ...asked, ...s.groups.map(row), ...types, ...apart].join('\n')
+  return [head, ...asked, ...compared, ...s.groups.map(row), ...types, ...apart].join('\n')
 }

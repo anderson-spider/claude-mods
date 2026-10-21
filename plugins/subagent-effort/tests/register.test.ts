@@ -129,7 +129,7 @@ test('a decision line and a foreground outcome line are written, and the host re
   dispatched(on, answer); await started($)
   expect(await settle($.tool.call(call({ tool_use_id: 'toolu_1' }) as never))).toEqual(answer)
   expect(h.ledger()).toEqual([
-    { v: 1, kind: 'decision', calibration: 3, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', received: null, effort: 'low', cap: null, level: 0, top: 0.8, jevReason: null, jevMs: expect.any(Number), jevTokens: { input: 300, output: 20 }, jevCostUsd: 0.0000126 },
+    { v: 1, kind: 'decision', calibration: 3, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', received: null, effort: 'low', cap: null, level: 0, fullLevel: null, top: 0.8, jevReason: null, jevMs: expect.any(Number), jevTokens: { input: 300, output: 20 }, jevCostUsd: 0.0000126 },
     { v: 1, kind: 'outcome', ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', effort: 'low', mode: 'foreground', resolvedModel: 'claude-haiku-5-5', status: 'completed', durationMs: 42_000, tokens: 1650 },
   ])
 })

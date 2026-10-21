@@ -18,6 +18,12 @@ export const JEV_MODEL = 'jev-1.13.0'
  */
 export const TASK_CHARS = 800
 /**
+ * How much of the task the comparison call reads: the length Jev read before the cut. Its level is only recorded, beside
+ * the head's, so the records show whether the cut lowers ratings (a hard task whose difficulty sits past the head) or
+ * changes nothing (length was noise).
+ */
+export const FULL_CHARS = 4000
+/**
  * USD per million input tokens of a Jev call; output tokens are free. The published rate as of October 2026, from gateway
  * docs rather than a TypeSafe invoice, so the cost it gives is an estimate.
  */
@@ -50,9 +56,10 @@ export type JevReason = Off | JevFailureReason
 /**
  * What routing decided: the effort Jev's answer selects (null when Jev was off or failed), the highest probability of its
  * distribution (`top`, the model's confidence), why Jev was not used, how long it took when asked and the tokens it
- * reported (null when it reported none or failed).
+ * reported for both calls (null when it reported none or failed). `fullLevel` is the level Jev gave the task read up to
+ * `FULL_CHARS`, recorded only: null when the task fits the head, so no comparison was asked, or when that call failed.
  */
-export type Choice = { effort: Effort | null; level: number | null; top: number | null; jevReason: JevReason | null; jevMs: number | null; jevTokens: JevUsage | null }
+export type Choice = { effort: Effort | null; level: number | null; top: number | null; jevReason: JevReason | null; jevMs: number | null; jevTokens: JevUsage | null; fullLevel?: number | null }
 
 const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -84,11 +91,13 @@ export function levelOf(dist: Record<string, number>): number {
   return best
 }
 
-/** Text that leaves for Jev: the key and then everything `redact` masks are removed from the whole text, then it is cut to `TASK_CHARS`. */
-export function clipped(text: string, key: string, ctx: { home: string; root: string }): string {
+/** Text that leaves for Jev: the key and then everything `redact` masks are removed from the whole text, then it is cut to `chars` (`TASK_CHARS`). */
+export function clipped(text: string, key: string, ctx: { home: string; root: string }, chars = TASK_CHARS): string {
   const redacted = redact(text.split(key).join(REDACTED), { home: ctx.home, root: ctx.root })
-  return redacted.length <= TASK_CHARS ? redacted : head(redacted, TASK_CHARS - 1)
+  return redacted.length <= chars ? redacted : head(redacted, chars - 1)
 }
+
+const summed = (a: JevUsage | null, b: JevUsage | null): JevUsage | null => (a && b ? { input: a.input + b.input, output: a.output + b.output } : a ?? b)
 
 export type EffortIo = KeyIo & { jev: JevIo; breaker: Breaker; gate: Gate; log: (text: string) => void }
 
@@ -103,10 +112,16 @@ export async function assessEffort(io: EffortIo, call: { task: string; keys: Key
   try {
     const access = await resolveAccess(io, call.keys)
     if (access.key === undefined) return off(access.off)
-    const state = clipped(call.task, access.key, call)
+    const state = clipped(call.task, access.key, call), full = clipped(call.task, access.key, call, FULL_CHARS)
     const jev = { ...io.jev, fetch: (url: string, init: Parameters<JevIo['fetch']>[1]) => { startedAt ??= io.jev.now(); return io.jev.fetch(url, init) } }
-    const { answers, usage } = await createJev(jev, access.key, { model: JEV_MODEL, breaker: io.breaker, gate: io.gate, answerIds: Object.keys(QUESTION) })(QUESTION, state)
+    const ask = createJev(jev, access.key, { model: JEV_MODEL, breaker: io.breaker, gate: io.gate, answerIds: Object.keys(QUESTION) })
+    // The head's call goes first, so it takes the slot and the breaker's probe; the comparison runs beside it, only when
+    // the task is longer than the head, and its failure never changes the decision.
+    const decided = ask(QUESTION, state)
+    const compared = full === state ? null : ask(QUESTION, full).then(reply => ({ level: levelOf(distribution(reply.answers)), usage: reply.usage })).catch(() => null)
+    const { answers, usage } = await decided
     const dist = distribution(answers), level = levelOf(dist)
-    return { effort: EFFORTS[level]!, level, top: Math.max(...Object.values(dist)), jevReason: null, jevMs: elapsed(), jevTokens: usage }
+    const other = compared ? await compared : null
+    return { effort: EFFORTS[level]!, level, top: Math.max(...Object.values(dist)), jevReason: null, jevMs: elapsed(), jevTokens: summed(usage, other?.usage ?? null), fullLevel: other?.level ?? null }
   } catch (error) { return off(classifyFailure(error).failure.reason) }
 }
