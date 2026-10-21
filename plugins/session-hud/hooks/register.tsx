@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Hook, Register, Timer } from 'claude-code'
+import type { Hook, Register, RenderSurface, Timer } from 'claude-code'
 import type { SessionHudCard, SessionHudStep, SessionHudSteps } from '../types'
 import { EMPTY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, located, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from './card'
 import { BRANCH, REV_PARSE, workspaceOf } from './workspace'
@@ -60,6 +60,7 @@ function ensureTicker($: Dollar, held: Held): void {
   held.ticker = $.clock.every(TICK_MS, () => {
     void observe($, async () => { const time = await $.clock.now(); await update($, nowAtom, () => time) })
     void observe($, () => reconcile($))
+    // A checkout made outside the session (another terminal, an IDE) raises no event; the tick catches it.
     void observe($, () => locate($))
   })
 }
@@ -113,13 +114,13 @@ async function suggest($: Dollar, turnId: string): Promise<void> {
 }
 
 /** Puts the ticked steps in the prompt box as a draft, never sent; where the surface draws its own composer, on the clipboard. */
-async function fill($: Dollar, surface: string): Promise<void> {
+async function fill($: Dollar, surface: RenderSurface): Promise<void> {
   const text = draftOf(await read($, stepsAtom))
   if (text === '') return
   const filled = await $.prompt.fill({ text })
   if (!filled.isFilled) {
     if (filled.refusal !== 'no_composer') return $.ui.toast('The prompt box is busy; try again')
-    const copied = await $.ui.copy({ text, surface: surface as never })
+    const copied = await $.ui.copy({ text, surface })
     if (!copied.isCopied) return $.ui.toast('Could not put the steps in the prompt')
     $.ui.toast('Copied; paste it into the prompt')
   }
