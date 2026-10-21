@@ -1,8 +1,7 @@
 #!/bin/sh
 # One-step setup of this marketplace: adds it, installs or updates every plugin and, on macOS, installs the
 # codex-computer-use helper (a LaunchAgent) from the installed plugin. Elsewhere codex-computer-use, which controls
-# native Mac apps, is left out. A plugin merged into another (RETIRED) is uninstalled once its successor is installed or
-# updated. Safe to run again.
+# native Mac apps, is left out. Safe to run again.
 #
 #   bootstrap.sh                     everything below
 #   bootstrap.sh --only tailscale,chatgpt only those plugins
@@ -20,9 +19,7 @@ set -eu
 MARKET=spider-claude-mods
 REPO=${BOOTSTRAP_SOURCE:-anderson-spider/claude-mods}
 # Every plugin of the marketplace; check-consistency keeps this list equal to marketplace.json.
-ALL="chatgpt codex-computer-use comfyui-local coolify file-explorer gitlab image-preview session-hud spider-team subagent-effort tailscale"
-# Plugins merged into another, as old:new: installing or updating new uninstalls old, whose hooks it now carries.
-RETIRED="spider-progress:spider-team"
+ALL="chatgpt codex-computer-use comfyui-local coolify file-explorer gitlab image-preview session-hud subagent-effort tailscale"
 NODE=${BOOTSTRAP_NODE:-/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node}
 ONLY=
 CHECK=
@@ -76,14 +73,6 @@ for p in $PLUGINS; do
   else
     act claude plugin install "$p@$MARKET" --scope user
   fi
-done
-
-for pair in $RETIRED; do
-  old=${pair%%:*}
-  case " $PLUGINS " in *" ${pair#*:} "*) ;; *) continue ;; esac
-  printf '%s' "$LISTED" | grep -q "\"$old@$MARKET\"" || continue
-  say "plugin $old (merged into ${pair#*:})"
-  act claude plugin uninstall "$old@$MARKET" --scope user || warn "$old: uninstall it yourself with \`claude plugin uninstall $old@$MARKET\`"
 done
 
 # The plugin's own folder holds its helper: the installer copies the code to ~/.claude/mcp and loads the LaunchAgent.

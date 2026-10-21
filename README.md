@@ -14,7 +14,6 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, lists and creates labels, runs, retries and cancels pipelines and jobs, waits for and reads pipelines, jobs and job errors, lists a job's artifacts with their URLs, picking the host and its token from the git remote. |
 | [image-preview](plugins/image-preview/README.md) | Shows images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads under its row in the transcript, as the desktop app does. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, the repository, folder and branch, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors; and, with the `nextSteps` option on, up to four next prompts from a fork of the session to pick one into the prompt box. |
-| [spider-team](plugins/spider-team/README.md) | `/spider-team:brainstorm <task>`: the session plans the task with dependencies, settles its open decisions with you in rounds of questions with a recommended answer, then owns and implements it, calls a read-only reviewer (Opus) and a researcher (Haiku) when they help, splits off parallel workers (Sonnet) only when independent parts gain from it, reviews what comes back against the real diff and verifies the integrated result before delivering, and a hook lets its agents run `git`, `gh` and `glab` only in their read-only forms; a new project in an empty directory starts with a spec and a plan for your approval; `/spider-team:team-on` keeps appending each later request to one task list until `/spider-team:team-off`. A `/spider-agents` pane shows the plan as a tree, Main's session with context and cost, the agents running, finished and planned with their model, attempts, steps, tokens, cost and latest tools, and a 15-minute timeline by role, as cards on the terminal and an SVG on the desktop; it lists spider-team's agents outside a run too, never other agent types, keeps an open run across `/reload-plugins`, a restart or a resume, and `/spider-agents clear` forgets it. spider-progress, which drew them as a separate plugin, is part of spider-team: uninstall it (`/plugin uninstall spider-progress@spider-claude-mods`; `scripts/bootstrap.sh` does it for you). |
 | [subagent-effort](plugins/subagent-effort/README.md) | Sets the reasoning effort of every native subagent call from Jev's rating of its task, leaving the model as it was, and keeps local records to compare efforts. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
@@ -34,7 +33,6 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.303 
 /plugin install gitlab@spider-claude-mods
 /plugin install image-preview@spider-claude-mods
 /plugin install session-hud@spider-claude-mods
-/plugin install spider-team@spider-claude-mods
 /plugin install subagent-effort@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 ```
@@ -51,7 +49,7 @@ codex-computer-use also needs a local helper on the Mac: follow [its install ste
 curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh
 ```
 
-Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, uninstalls spider-progress once spider-team, which carries it, is installed or updated, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure gitlab` for its `tokens`, `claude plugin configure tailscale` for its `apiKey`, `claude plugin configure coolify` for its `url` and `apiKey`, `claude plugin configure comfyui-local` for its `url`, and `claude plugin configure subagent-effort` for its `apiKey` (or set `JEV_API_KEY`).
+Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure gitlab` for its `tokens`, `claude plugin configure tailscale` for its `apiKey`, `claude plugin configure coolify` for its `url` and `apiKey`, `claude plugin configure comfyui-local` for its `url`, and `claude plugin configure subagent-effort` for its `apiKey` (or set `JEV_API_KEY`).
 
 ### Update
 
