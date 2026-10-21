@@ -39,8 +39,8 @@ const TITLE_MIN = 8
 const WIDE = 70
 
 const CARD_TONE: Record<CardKey, Tone> = { session: 'claude', plan: 'suggestion', running: 'success', finished: 'inactive', planned: 'warning', timeline: 'merged' }
-const ROLE_TONE: Record<SpiderTier | 'main', Tone> = { main: 'claude', planner: 'merged', worker: 'suggestion', researcher: 'warning', reviewer: 'planMode' }
-const ROLES: (SpiderTier | 'main')[] = ['main', 'planner', 'worker', 'researcher', 'reviewer']
+const ROLE_TONE: Record<SpiderTier | 'main', Tone> = { main: 'claude', worker: 'suggestion', researcher: 'warning', reviewer: 'planMode' }
+const ROLES: (SpiderTier | 'main')[] = ['main', 'worker', 'researcher', 'reviewer']
 
 const nameOf = (a: SpiderAgent) => a.tier ?? 'agent'
 const toneOf = (role: string): Tone => ROLE_TONE[role as SpiderTier] ?? 'inactive'
@@ -235,7 +235,7 @@ function listed(agents: SpiderAgent[], s: Strings, row: (a: SpiderAgent) => Piec
   return [...agents.slice(0, LISTED).map(row), ...(extra > 0 ? [[p(`  ${fill(s.pane.more, extra)}`, 'dim')]] : [])]
 }
 
-/** A lane per role across the last 15 minutes in one-minute buckets, lit where it worked: Main and spider-team's four roles, always there, idle ones empty. */
+/** A lane per role across the last 15 minutes in one-minute buckets, lit where it worked: Main and spider-team's three roles, always there, idle ones empty. */
 function timelineLines(v: PaneView, s: Strings, inner: number): Piece[][] {
   const from = v.now - TIMELINE_MS
   const cw = Math.floor((inner - LANE_LABEL) / BUCKETS)

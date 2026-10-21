@@ -65,12 +65,13 @@ test('the history cap drops the oldest finished agents and keeps running ones', 
 })
 
 test('tierOf strips the plugin namespace and ignores other types', () => {
-  expect(tierOf('spider-team:spider-planner')).toBe('planner')
+  expect(tierOf('spider-team:spider-reviewer')).toBe('reviewer')
   expect(tierOf('spider-researcher')).toBe('researcher')
-  expect(tierOf('other:spider-planner')).toBeUndefined()
+  expect(tierOf('other:spider-reviewer')).toBeUndefined()
+  expect(tierOf('spider-team:spider-planner')).toBeUndefined()
   expect(tierOf('general-purpose')).toBeUndefined()
   expect(tierOf(undefined)).toBeUndefined()
-  expect(TIERS.planner).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
+  expect(TIERS.reviewer).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
   expect(taskIdOf('intro\nspider-task: T12  \nmore')).toBe('T12')
   expect(taskIdOf('spider-task: X1')).toBeUndefined()
 })
