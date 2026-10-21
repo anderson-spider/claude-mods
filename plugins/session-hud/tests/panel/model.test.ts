@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionHudCard, SessionHudPanel, SessionHudPanelAgent } from '../../types'
 import { EMPTY } from '../../hooks/card'
-import { FRAME, LANES, paneLines, paneModel, rowsOf } from '../../hooks/panel/model'
+import { FRAME, paneLines, paneModel, rowsOf } from '../../hooks/panel/model'
 import type { Piece } from '../../hooks/panel/text'
 
 const USAGE = { input: 1_000, output: 500, cacheRead: 180_000, cacheWrite: 1_900 }
@@ -57,19 +57,23 @@ test('only names reach the screen: a type, model, tool or reason that is not one
   expect(text).toMatch(/Explore .*error · 3 min ago/)
 })
 
-test('finished agents show how they ended and when, and the card counts what it leaves out', () => {
+test('finished agents show how they ended and when, one row per type, its latest first, with how many of it ended', () => {
   const failed: SessionHudPanelAgent = { ...DONE, id: 'f', status: 'failed', endReason: 'max_tokens', endedAt: 200_000 }
-  const rows = card('finished', { panel: { ...PANEL, agents: [RUNNING, failed, DONE] } })!.lines
+  const plan: SessionHudPanelAgent = { ...DONE, id: 'p', type: 'Plan', endedAt: 100_000 }
+  const rows = card('finished', { panel: { ...PANEL, agents: [RUNNING, plan, failed, DONE] } })!.lines
+  expect(rows.length).toBe(2)
   expect(rows[0]![0]).toEqual({ text: '●', style: 'error' })
-  expect(all([rows[0]!])).toMatch(/Explore .*max_tokens · 1 min ago$/)
-  expect(all([rows[1]!])).toMatch(/^● Explore +Haiku 5\.5 +01:01 +3 min ago$/)
-  const many = Array.from({ length: 9 }, (_, i) => ({ ...DONE, id: `d${i}`, endedAt: 1_000 * i }))
+  expect(all([rows[0]!])).toMatch(/^● Explore .*max_tokens · 1 min ago · ×2$/)
+  expect(all([rows[1]!])).toMatch(/^● Plan +Haiku 5\.5 +01:40 +2 min ago$/)
+  const many = Array.from({ length: 9 }, (_, i) => ({ ...DONE, id: `d${i}`, type: `type${i % 8}`, endedAt: 1_000 * i }))
   const lines = card('finished', { panel: { ...PANEL, agents: many } })!.lines
-  expect(lines.length).toBe(7)
-  expect(all([lines.at(-1)!])).toBe('  +3 more')
+  expect(lines.map(l => all([l]).split(/ +/)[1])).toEqual(['type0', 'type7', 'type6', 'type5', 'type4', 'type3', 'type2', 'type1'])
+  expect(all([lines[0]!])).toMatch(/4 min ago · ×2$/)
+  expect(all([lines[1]!])).not.toContain('×')
+  expect(card('finished', { panel: { ...PANEL, agents: many } })!.count).toBe('9')
 })
 
-test('the timeline lanes the main session and each agent type that worked in the last 15 minutes, the most recent first, lit in one-minute buckets', () => {
+test('the timeline lanes the main session and each agent type that worked in the last 15 minutes, all of them, the most recent first, lit in one-minute buckets', () => {
   const now = 20 * 60_000
   const card0 = { ...CARD, turnStartedAt: undefined }
   const main = { ...PANEL.main, turns: [[6 * 60_000, 7 * 60_000]] as [number, number][] }
@@ -84,7 +88,7 @@ test('the timeline lanes the main session and each agent type that worked in the
   expect(all([lines[2]!]).slice(14)).toBe(`${'·'.repeat(10 * cw)}${'━'.repeat(cw)}${'·'.repeat(4 * cw)}`)
   expect(all([lines.at(-1)!])).toMatch(/^ +−15m +now$/)
   const types = Array.from({ length: 9 }, (_, i) => ({ ...DONE, id: `t${i}`, type: `type${i}`, startedAt: now - 60_000, endedAt: now - i }))
-  expect(card('timeline', { now, card: card0, panel: { ...PANEL, agents: types } })!.lines.length).toBe(LANES + 1)
+  expect(card('timeline', { now, card: card0, panel: { ...PANEL, agents: types } })!.lines.length).toBe(1 + 9 + 1)
 })
 
 test('without agents the panel says so, and the rail moves only while one runs', () => {
