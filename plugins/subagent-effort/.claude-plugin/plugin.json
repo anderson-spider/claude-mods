@@ -1,6 +1,6 @@
 {
   "name": "subagent-effort",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sets the reasoning effort of every native subagent call from Jev's rating of its task, leaving the model as it was, and keeps local records to compare efforts.",
   "author": {
     "name": "anderson-spider"
@@ -12,6 +12,11 @@
       "title": "Jev API key",
       "description": "The key Jev rates subagent tasks with. When it is not set, JEV_API_KEY from the environment is used. Sent only to Jev in the Authorization header; leave it out of repository settings, which would make the plugin refuse it.",
       "sensitive": true
+    },
+    "caps": {
+      "type": "string",
+      "title": "Effort caps per agent type",
+      "description": "The highest effort Jev may pick for an agent type, as type=effort pairs split by commas (efforts: low, medium, high, xhigh). Left empty: Explore=medium,web-fetch=medium,claude-code-guide=low,statusline-setup=low. none turns the caps off."
     }
   }
 }
