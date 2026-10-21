@@ -50,17 +50,4 @@ Node 24 (`.nvmrc`; any version manager that reads it works), then `npm ci` once.
 - Conventional Commits in English for commits and PR titles; English PR descriptions (`.github/pull_request_template.md`).
 - Refactor PRs diff `npm run plugins:scan` output before and after.
 - Docs describe current behavior and how to use or contribute; history lives in git, and a rule explaining one line of code goes in a comment there.
-
-## Agent skills
-
-### Issue tracker
-
-Issues live in this repository's GitHub Issues, through the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The five default triage labels, each named after its role. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root, each created when the first term or decision needs it. See `docs/agents/domain.md`.
+- Issues live in this repository's GitHub Issues; use the `gh` CLI.
