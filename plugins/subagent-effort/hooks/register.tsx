@@ -1,4 +1,5 @@
 import type { BuiltinToolInputs, Hook, Register } from 'claude-code'
+import { capped, capsOf } from './caps'
 import { assessEffort } from './effort'
 import type { Effort, EffortIo } from './effort'
 import { createBreaker, createGate } from './jev'
@@ -74,13 +75,16 @@ export const register: Register = (on, options) => {
   // Background agents wait here for their turn.complete; module state of this load only, dropped on reload.
   const background = createPending(200)
   const warned = new Set<string>()
+  const { caps, invalid } = capsOf(options.caps)
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: STATS_COMMAND, description: STATS_DESCRIPTION })
+    if (invalid.length) try { $.ui.log(`subagent-effort: caps entries ignored: ${invalid.join(', ')}`, { to: 'debug' }) } catch { /* Logging cannot block the start. */ }
     return next(e)
   })
   // Sets the effort of every native subagent call from Jev's rating of the task, and only the effort: the model stays the
   // call's or the definition's. Jev is the authority: its effort replaces one the call came with. A fork is left alone (the
-  // host ignores its effort), and when Jev is off or fails the call goes as it came, its own effort included.
+  // host ignores its effort), and when Jev is off or fails the call goes as it came, its own effort included. The agent
+  // type's cap holds Jev's pick down; it never touches a call Jev did not route.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const call = e as BuiltinToolInputs['Agent'] & { tool_use_id: string }
     const agentType = call.subagent_type || DEFAULT_TYPE
@@ -89,13 +93,16 @@ export const register: Register = (on, options) => {
     const choice = await assessEffort(io($), {
       task: call.prompt, home: await $.env.get('HOME') ?? '', root: await $.session.root(), keys: { option: options.apiKey, env: await $.env.get('JEV_API_KEY') },
     })
-    const effort: Effort | null = choice.effort ?? received
-    $.ui.log(`subagent-effort: ${agentType} → ${choice.effort ?? `as it came (${choice.jevReason})`}`, { to: 'debug' })
+    const held = choice.effort ? capped(choice.effort, agentType, caps) : null
+    const routed: Effort | null = held?.effort ?? null
+    const effort: Effort | null = routed ?? received
+    $.ui.log(`subagent-effort: ${agentType} → ${routed ? `${routed}${held?.cap ? ` (capped from ${choice.effort})` : ''}` : `as it came (${choice.jevReason})`}`, { to: 'debug' })
     warnOff($, choice.jevReason, warned)
-    await record($, 'decision', decisionLine({ ts: stamp(), toolUseId: call.tool_use_id, agentType, briefChars: call.prompt.length, source: choice.effort ? 'jev' : 'off', received, effort, choice }))
-    // The effort shows beside the task in the transcript, with the one it replaced.
-    const was = received && received !== choice.effort ? `, was ${received}` : ''
-    const result = await next(choice.effort ? { ...e, description: `${call.description} (${choice.effort}${was})`, effort: choice.effort } : e)
+    await record($, 'decision', decisionLine({ ts: stamp(), toolUseId: call.tool_use_id, agentType, briefChars: call.prompt.length, source: routed ? 'jev' : 'off', received, effort, cap: held?.cap ?? null, choice }))
+    // The effort shows beside the task in the transcript, with the cap that held it down and the one it replaced.
+    const was = received && received !== routed ? `, was ${received}` : ''
+    const cap = held?.cap ? ', capped' : ''
+    const result = await next(routed ? { ...e, description: `${call.description} (${routed}${cap}${was})`, effort: routed } : e)
     // `run_in_background` is not in this host's Agent typing, and a call may send it as the string "true".
     const mode = { flag: (e as { run_in_background?: unknown }).run_in_background, surfaces: await $.session.surfaces().catch(() => []), fromSubagent: (e as { agentId?: string }).agentId !== undefined }
     await dispatched($, { toolUseId: call.tool_use_id, agentType, effort, background: runsInBackground(mode), model: call.model ?? null }, result, background)

@@ -10,9 +10,13 @@ import { head, redact, REDACTED } from './redact'
 
 export type Effort = NonNullable<BuiltinToolInputs['Agent']['effort']>
 // Tags each decision line so the stats compare Jev only under one policy: bump it whenever QUESTION, EFFORTS or POLICY change.
-export const CALIBRATION = 2
+export const CALIBRATION = 3
 export const JEV_MODEL = 'jev-1.13.0'
-export const TASK_CHARS = 4000
+/**
+ * How much of the task Jev reads: its head, where a brief states its goal. Ratings followed the brief's length even when
+ * asked to ignore it (long briefs drew high), so the rest is never sent; the ledger keeps the whole length apart.
+ */
+export const TASK_CHARS = 800
 /**
  * USD per million input tokens of a Jev call; output tokens are free. The published rate as of October 2026, from gateway
  * docs rather than a TypeSafe invoice, so the cost it gives is an estimate.
@@ -37,9 +41,10 @@ export const QUESTION = {
   },
 } as const
 
-// Policy, not a measurement: spending matters more than headroom, so spare effort costs 1.25 times what missing effort
-// does, and the higher of two adjacent levels wins only once it holds more than 5/9 (about 56%) of their weight.
-export const POLICY = { under: 1, over: 1.25 } as const
+// Policy, not a measurement: spending matters more than headroom, so spare effort costs 1.5 times what missing effort
+// does, and the higher of two adjacent levels wins only once it holds more than 60% of their weight: a split judgment
+// stays on the cheaper level.
+export const POLICY = { under: 1, over: 1.5 } as const
 
 export type JevReason = Off | JevFailureReason
 /**

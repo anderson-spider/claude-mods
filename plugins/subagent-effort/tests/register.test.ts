@@ -27,14 +27,14 @@ test('Jev sets the effort of any native agent type, shown in its description, an
   const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'test-key'
   h.answers.reasoning = { probabilities: { '2': 1 } }
   await started($)
-  expect(await settle($.tool.call(call({ model: 'haiku' }) as never))).toHaveProperty('result', 'native answer')
-  expect(received[0]).toEqual({ ...call({ model: 'haiku' }), description: 'Fixture (high)', effort: 'high' })
+  expect(await settle($.tool.call(call({ model: 'haiku', subagent_type: 'Plan' }) as never))).toHaveProperty('result', 'native answer')
+  expect(received[0]).toEqual({ ...call({ model: 'haiku', subagent_type: 'Plan' }), description: 'Fixture (high)', effort: 'high' })
   // A call without a type is the host's general-purpose agent, routed the same way.
   const { subagent_type: _, ...untyped } = call({ tool_use_id: 'dispatch-2' })
   await settle($.tool.call(untyped as never))
   expect(received[1]).toMatchObject({ effort: 'high' })
   expect(h.requests).toHaveLength(2)
-  expect(h.ledger().filter(l => l.kind === 'decision').map(l => l.agentType)).toEqual(['Explore', 'general-purpose'])
+  expect(h.ledger().filter(l => l.kind === 'decision').map(l => l.agentType)).toEqual(['Plan', 'general-purpose'])
 })
 
 test('Jev replaces an effort the call came with, shows the one it replaced, and leaves the model alone', async ($, on) => {
@@ -57,6 +57,36 @@ test('when Jev is off or fails, an effort the call came with goes as it came and
   h.env.JEV_API_KEY = 'test-key'; h.faults.http = 401
   await settle($.tool.call(asked as never)); expect(received[1]).toEqual(asked)
   expect(h.ledger().map(l => [l.source, l.jevReason, l.received, l.effort])).toEqual([['off', 'no-key', 'high', 'high'], ['off', 'http', 'high', 'high']])
+})
+
+test("an agent type's cap holds Jev's pick down, shown in the description and recorded beside Jev's own level", async ($, on) => {
+  const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'test-key'
+  h.answers.reasoning = { probabilities: { '3': 1 } }
+  await started($)
+  await settle($.tool.call(call({ effort: 'max' }) as never))
+  expect(received[0]).toMatchObject({ effort: 'medium', description: 'Fixture (medium, capped, was max)' })
+  await settle($.tool.call(call({ subagent_type: 'claude-code-guide', tool_use_id: 'guide' }) as never))
+  expect(received[1]).toMatchObject({ effort: 'low', description: 'Fixture (low, capped)' })
+  await settle($.tool.call(call({ subagent_type: 'general-purpose', tool_use_id: 'gp' }) as never))
+  expect(received[2]).toMatchObject({ effort: 'xhigh', description: 'Fixture (xhigh)' })
+  expect(h.ledger().filter(l => l.kind === 'decision').map(l => [l.agentType, l.effort, l.cap, l.level])).toEqual([['Explore', 'medium', 'medium', 3], ['claude-code-guide', 'low', 'low', 3], ['general-purpose', 'xhigh', null, 3]])
+})
+
+test('the caps option replaces the default caps, none turns them off, and a bad entry is logged and dropped', { options: { caps: 'Plan=low, Explore=max, bad' } }, async ($, on) => {
+  const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'test-key'
+  h.answers.reasoning = { probabilities: { '2': 1 } }
+  await started($)
+  expect(h.logs).toContain('subagent-effort: caps entries ignored: Explore=max, bad')
+  await settle($.tool.call(call({ subagent_type: 'Plan' }) as never))
+  await settle($.tool.call(call() as never))
+  expect(received.map(r => r.effort)).toEqual(['low', 'high'])
+})
+
+test('a cap never touches a call Jev did not route', async ($, on) => {
+  const h = world(on), received = dispatched(on); await started($)
+  await settle($.tool.call(call({ effort: 'xhigh' }) as never))
+  expect(received[0]).toEqual(call({ effort: 'xhigh' }))
+  expect(h.ledger()[0]).toMatchObject({ source: 'off', effort: 'xhigh', cap: null })
 })
 
 test('a fork or an empty task passes untouched, unrouted and unrecorded', async ($, on) => {
@@ -99,7 +129,7 @@ test('a decision line and a foreground outcome line are written, and the host re
   dispatched(on, answer); await started($)
   expect(await settle($.tool.call(call({ tool_use_id: 'toolu_1' }) as never))).toEqual(answer)
   expect(h.ledger()).toEqual([
-    { v: 1, kind: 'decision', calibration: 2, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', received: null, effort: 'low', level: 0, top: 0.8, jevReason: null, jevMs: expect.any(Number), jevTokens: { input: 300, output: 20 }, jevCostUsd: 0.0000126 },
+    { v: 1, kind: 'decision', calibration: 3, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', received: null, effort: 'low', cap: null, level: 0, top: 0.8, jevReason: null, jevMs: expect.any(Number), jevTokens: { input: 300, output: 20 }, jevCostUsd: 0.0000126 },
     { v: 1, kind: 'outcome', ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', effort: 'low', mode: 'foreground', resolvedModel: 'claude-haiku-5-5', status: 'completed', durationMs: 42_000, tokens: 1650 },
   ])
 })
@@ -183,7 +213,7 @@ test('the stats command checks Jev access the way routing does, summarizes the r
   h.env.JEV_API_KEY = 'test-key'
   await settle($.tool.call(call() as never))
   const text = (await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text
-  expect(text).toMatch(/^Jev access in this session: ok \(key from JEV_API_KEY\)\.\n1 decisions: Jev 1, Jev off 0\.\nJev calls: 1, median \d+ms, 300 input and 20 output tokens, about \$0\.000013 \(estimated\)\.\nhaiku\/low: 1 runs, median 42s and 2k tokens$/)
+  expect(text).toMatch(/^Jev access in this session: ok \(key from JEV_API_KEY\)\.\n1 decisions: Jev 1, Jev off 0\.\nJev calls: 1, median \d+ms, 300 input and 20 output tokens, about \$0\.000013 \(estimated\)\.\nhaiku\/low: 1 runs, median 42s and 2k tokens\nBy agent type:\n {2}Explore: 1 runs, median 42s and 2k tokens$/)
   expect(text).not.toContain('test-key')
   h.fsFaults.read = true
   expect((await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text).toBe('Jev access in this session: ok (key from JEV_API_KEY).\nthe routing records could not be read.')
