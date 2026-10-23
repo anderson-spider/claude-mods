@@ -110,12 +110,12 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'gitlab_mr',
       description:
-        "Merge requests of the current repo's GitLab project. list (filters; allProjects: every project; next = more " +
-        'pages), get, status (pipeline, approvals, discussions, conflicts, blockers), diff, commits, create, update, ' +
+        "Merge requests of the repo's GitLab project. list (allProjects: every project; next = more " +
+        'pages), get, status (pipeline, approvals, discussions, conflicts, blockers), diff, commits, create (draft by ' +
+        'default), update, ' +
         'approve, unapprove, rebase, merge (only when the user asks; iid and head sha required; refused for drafts, ' +
         'conflicts, blocking discussions, release* or protected targets besides main/master/develop unless ' +
-        'allowProtectedTarget). Labels must exist unless ' +
-        'createMissingLabels. Writes on MRs by others are refused without allowOthers.',
+        'allowProtectedTarget). Labels must exist unless createMissingLabels. Writes on MRs by others are refused without allowOthers.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -145,7 +145,7 @@ export const register: Register = (on, options) => {
           stateEvent: { type: 'string', enum: allOf<'close' | 'reopen'>()('close', 'reopen') },
           removeSourceBranch: { type: 'boolean' },
           squash: { type: 'boolean' },
-          files: { ...NAMES, description: 'diff: paths containing these.' },
+          files: { ...NAMES, description: 'diff: paths with these.' },
           sha: { type: 'string', description: 'merge: full head sha from status.' },
           whenPipelineSucceeds: { type: 'boolean', description: 'merge: auto-merge on pipeline success.' },
           allowOthers: ALLOW_OTHERS,
