@@ -111,6 +111,8 @@ test("every write on someone else's MR is refused without allowOthers, and goes 
     { action: 'edit', noteId: 3, body: 'x' },
     { action: 'resolve', discussionId: 'aa' },
     { action: 'unresolve', discussionId: 'aa' },
+    { action: 'comment', body: 'x', draft: true },
+    { action: 'publish' },
   ]) {
     await expect(comment(ctx, { iid: 7, ...input }), input.action).rejects.toThrow(refused)
   }
@@ -165,4 +167,51 @@ test('unresolved stops after twenty pages and says where to go on, and cuts long
   expect(out.note).toBe('stopped after 2000 discussions: list from page 21 with unresolvedOnly')
   const long = { id: 'ee', notes: [{ id: 7, body: 'x'.repeat(2000), resolvable: true, resolved: false }] }
   expect((unresolvedView(long)?.body as string).length).toBe(1501)
+})
+
+test('draft makes comment, reply, line and edit draft notes, drafts lists them and publish posts one or all', async () => {
+  const { ctx, writes } = fakeCtx({
+    'GET /merge_requests/7': MR,
+    'GET /merge_requests/7/diffs': [{ old_path: 'src/a.ts', new_path: 'src/a.ts' }],
+    'GET /merge_requests/7/draft_notes': [
+      { id: 20, note: 'Nit', discussion_id: null, position: { new_path: 'src/a.ts', old_path: 'src/a.ts', new_line: 3, old_line: null } },
+      { id: 21, note: 'Agreed', discussion_id: 'aa', position: null },
+    ],
+    'POST /merge_requests/7/draft_notes': (c) => ({ id: 22, note: c.body?.note, discussion_id: c.body?.in_reply_to_discussion_id ?? null }),
+    'PUT /merge_requests/7/draft_notes/22': {},
+    'PUT /merge_requests/7/draft_notes/22/publish': {},
+    'POST /merge_requests/7/draft_notes/bulk_publish': {},
+  })
+
+  expect(JSON.parse(await comment(ctx, { action: 'comment', iid: 7, body: 'LGTM', draft: true }))).toEqual({ draft: { id: 22, body: 'LGTM' }, note: 'Only you see it until publish.' })
+  expect(JSON.parse(await comment(ctx, { action: 'reply', iid: 7, discussionId: 'aa', body: 'Fixed', draft: true })).draft).toEqual({ id: 22, discussionId: 'aa', body: 'Fixed' })
+  await comment(ctx, { action: 'line', iid: 7, path: 'src/a.ts', line: 3, body: 'Nit', draft: true })
+  expect(await comment(ctx, { action: 'edit', iid: 7, noteId: 22, body: 'Nit: rename', draft: true })).toBe('Draft note 22 edited.')
+  expect(JSON.parse(await comment(ctx, { action: 'drafts', iid: 7 })).drafts).toEqual([
+    { id: 20, at: { path: 'src/a.ts', line: 3 }, body: 'Nit' },
+    { id: 21, discussionId: 'aa', body: 'Agreed' },
+  ])
+  expect(await comment(ctx, { action: 'publish', iid: 7, noteId: 22 })).toBe('Draft note 22 published.')
+  expect(await comment(ctx, { action: 'publish', iid: 7 })).toBe('Every draft note of yours on !7 published.')
+
+  expect(writes().map((c) => [c.method, c.path, c.body])).toEqual([
+    ['POST', '/merge_requests/7/draft_notes', { note: 'LGTM' }],
+    ['POST', '/merge_requests/7/draft_notes', { note: 'Fixed', in_reply_to_discussion_id: 'aa' }],
+    [
+      'POST',
+      '/merge_requests/7/draft_notes',
+      { note: 'Nit', position: { position_type: 'text', base_sha: 'b', start_sha: 's', head_sha: 'h', new_path: 'src/a.ts', old_path: 'src/a.ts', new_line: 3 } },
+    ],
+    ['PUT', '/merge_requests/7/draft_notes/22', { note: 'Nit: rename' }],
+    ['PUT', '/merge_requests/7/draft_notes/22/publish', undefined],
+    ['POST', '/merge_requests/7/draft_notes/bulk_publish', undefined],
+  ])
+})
+
+test('draft on an action that is not a comment write is refused before any request', async () => {
+  const { ctx, calls } = fakeCtx({})
+  for (const action of ['list', 'drafts', 'resolve', 'publish']) {
+    await expect(comment(ctx, { action, iid: 7, discussionId: 'aa', draft: true }), action).rejects.toThrow('draft applies to comment, reply, line and edit.')
+  }
+  expect(calls).toEqual([])
 })

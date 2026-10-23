@@ -18,7 +18,7 @@ const MR_ACTIONS = allOf<Inputs['mcp__gitlab__gitlab_mr']['action']>()(
   'list', 'get', 'status', 'create', 'update', 'diff', 'commits', 'approve', 'unapprove', 'rebase', 'merge',
 )
 const COMMENT_ACTIONS = allOf<Inputs['mcp__gitlab__gitlab_mr_comment']['action']>()(
-  'list', 'unresolved', 'comment', 'reply', 'line', 'edit', 'resolve', 'unresolve',
+  'list', 'unresolved', 'drafts', 'comment', 'reply', 'line', 'edit', 'resolve', 'unresolve', 'publish',
 )
 const PIPELINE_ACTIONS = allOf<Inputs['mcp__gitlab__gitlab_pipeline']['action']>()(
   'list', 'jobs', 'wait', 'run', 'retry', 'cancel', 'play', 'artifacts',
@@ -110,12 +110,12 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'gitlab_mr',
       description:
-        "Merge requests of the current repo's GitLab project. list (filters; allProjects: every project; next = more " +
-        'pages), get, status (pipeline, approvals, discussions, conflicts, blockers), diff, commits, create, update, ' +
+        "Merge requests of the repo's GitLab project. list (allProjects: every project; next = more " +
+        'pages), get, status (pipeline, approvals, discussions, conflicts, blockers), diff, commits, create (draft by ' +
+        'default), update, ' +
         'approve, unapprove, rebase, merge (only when the user asks; iid and head sha required; refused for drafts, ' +
         'conflicts, blocking discussions, release* or protected targets besides main/master/develop unless ' +
-        'allowProtectedTarget). Labels must exist unless ' +
-        'createMissingLabels. Writes on MRs by others are refused without allowOthers.',
+        'allowProtectedTarget). Labels must exist unless createMissingLabels. Writes on MRs by others are refused without allowOthers.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -145,7 +145,7 @@ export const register: Register = (on, options) => {
           stateEvent: { type: 'string', enum: allOf<'close' | 'reopen'>()('close', 'reopen') },
           removeSourceBranch: { type: 'boolean' },
           squash: { type: 'boolean' },
-          files: { ...NAMES, description: 'diff: paths containing these.' },
+          files: { ...NAMES, description: 'diff: paths with these.' },
           sha: { type: 'string', description: 'merge: full head sha from status.' },
           whenPipelineSucceeds: { type: 'boolean', description: 'merge: auto-merge on pipeline success.' },
           allowOthers: ALLOW_OTHERS,
@@ -160,7 +160,8 @@ export const register: Register = (on, options) => {
         'Discussions of a merge request: list (ids, authors, file/line, resolved; next = more pages), unresolved (open ' +
         'threads: place, author, ask, last reply; up to 2,000 discussions), comment, reply ' +
         'to a discussion, line (a diff comment on path at line, or oldLine for a removed line), edit a note, resolve, ' +
-        'unresolve. Writes on MRs by others are refused without allowOthers.',
+        'unresolve; draft: true does these as private draft notes, drafts lists them, publish posts one (noteId) or ' +
+        'all. Writes on MRs by others are refused without allowOthers.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -169,7 +170,8 @@ export const register: Register = (on, options) => {
           iid: IID,
           body: { type: 'string', description: 'Markdown text.' },
           discussionId: { type: 'string' },
-          noteId: { type: 'integer' },
+          noteId: { type: 'integer', description: 'edit; publish: one draft, default all.' },
+          draft: { type: 'boolean', description: 'comment, reply, line, edit: a draft note.' },
           path: { type: 'string', description: 'line: file path as in the diff.' },
           line: { type: 'integer', description: 'line: new-side line number.' },
           oldLine: { type: 'integer', description: 'line: old-side line number (both for an unchanged line).' },

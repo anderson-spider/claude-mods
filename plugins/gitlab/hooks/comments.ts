@@ -1,4 +1,5 @@
-// gitlab_mr_comment: read and write a merge request's discussions; writes only on the token's own MR unless allowOthers. Deleting a comment is not offered.
+// gitlab_mr_comment: read and write a merge request's discussions, directly or as draft notes published later; writes
+// only on the token's own MR unless allowOthers. Deleting a comment or a draft is not offered.
 import type { McpToolInputs } from 'claude-code'
 import { GitlabError } from './api'
 import { InputError, bool, clip, id, items, json, more, mrIid, need, paging, str, writable, type Ctx, type User } from './context'
@@ -17,6 +18,18 @@ type Note = {
   position?: { new_path?: string; old_path?: string; new_line?: number | null; old_line?: number | null } | null
 }
 type Discussion = { id: string; notes: Note[] }
+type DraftNote = { id: number; note: string; discussion_id?: string | null; position?: Note['position'] }
+
+/** A draft note as the model needs it: its id (for edit and publish), the thread it answers and where in the diff. */
+export function draftView(d: DraftNote): Record<string, unknown> {
+  const at = d.position
+  return {
+    id: d.id,
+    discussionId: d.discussion_id ?? undefined,
+    at: at?.new_path || at?.old_path ? { path: at.new_path ?? at.old_path, line: at.new_line ?? undefined, oldLine: at.old_line ?? undefined } : undefined,
+    body: d.note,
+  }
+}
 
 /** A discussion as the model needs it: who said what, where in the diff, and whether it is resolved. System notes are left out. */
 export function discussionView(d: Discussion): Record<string, unknown> | undefined {
@@ -114,33 +127,47 @@ function spot(input: CommentInput): Spot {
   return { path, newLine, oldLine }
 }
 
-async function line(ctx: Ctx, iid: number, mr: Mr, at: Spot, text: string): Promise<string> {
+/** The diff position of a line comment, at the MR head. */
+async function position(ctx: Ctx, iid: number, mr: Mr, at: Spot): Promise<Record<string, unknown>> {
   const refs = need(mr.diff_refs ?? undefined, 'GitLab gave no diff refs for this merge request yet; try again once its diff is ready.')
   const paths = await diffPaths(ctx, iid, at.path)
-  const d = (await ctx.api.send('POST', `/merge_requests/${iid}/discussions`, {
-    body: text,
-    position: {
-      position_type: 'text',
-      base_sha: refs.base_sha,
-      start_sha: refs.start_sha,
-      head_sha: refs.head_sha,
-      new_path: paths.new_path,
-      old_path: paths.old_path,
-      ...(at.newLine !== undefined ? { new_line: at.newLine } : {}),
-      ...(at.oldLine !== undefined ? { old_line: at.oldLine } : {}),
-    },
-  })) as Discussion
-  return json(discussionView(d))
+  return {
+    position_type: 'text',
+    base_sha: refs.base_sha,
+    start_sha: refs.start_sha,
+    head_sha: refs.head_sha,
+    new_path: paths.new_path,
+    old_path: paths.old_path,
+    ...(at.newLine !== undefined ? { new_line: at.newLine } : {}),
+    ...(at.oldLine !== undefined ? { old_line: at.oldLine } : {}),
+  }
+}
+
+/** A draft note: seen only by the token's user until publish posts it, as GitLab's review does. */
+async function draft(ctx: Ctx, iid: number, mr: Mr, action: CommentAction, text: string, d?: string, note?: number, at?: Spot): Promise<string> {
+  if (action === 'edit') {
+    await ctx.api.send('PUT', `/merge_requests/${iid}/draft_notes/${note}`, { note: text })
+    return `Draft note ${note} edited.`
+  }
+  const added = (await ctx.api.send('POST', `/merge_requests/${iid}/draft_notes`, {
+    note: text,
+    ...(d ? { in_reply_to_discussion_id: d } : {}),
+    ...(at ? { position: await position(ctx, iid, mr, at) } : {}),
+  })) as DraftNote
+  return json({ draft: draftView(added), note: 'Only you see it until publish.' })
 }
 
 export async function comment(ctx: Ctx, input: CommentInput): Promise<string> {
   const action = input.action as CommentAction
-  if (!['list', 'unresolved', 'comment', 'reply', 'line', 'edit', 'resolve', 'unresolve'].includes(action)) {
+  if (!['list', 'unresolved', 'drafts', 'comment', 'reply', 'line', 'edit', 'resolve', 'unresolve', 'publish'].includes(action)) {
     throw new InputError(`Unknown action: ${String(input.action)}.`)
   }
+  const asDraft = bool(input.draft) === true
+  if (asDraft && !['comment', 'reply', 'line', 'edit'].includes(action)) throw new InputError('draft applies to comment, reply, line and edit.')
   // the inputs a write needs are checked before any request
   const d = action === 'reply' || action === 'resolve' || action === 'unresolve' ? discussionId(input.discussionId) : undefined
-  const note = action === 'edit' ? need(id(input.noteId, 'noteId'), 'edit needs noteId (from list).') : undefined
+  const note =
+    action === 'edit' ? need(id(input.noteId, 'noteId'), `edit needs noteId (from ${asDraft ? 'drafts' : 'list'}).`) : action === 'publish' ? id(input.noteId, 'noteId') : undefined
   const at = action === 'line' ? spot(input) : undefined
   const text = action === 'comment' || action === 'reply' || action === 'line' || action === 'edit' ? body(input) : ''
   const iid = await mrIid(ctx, input.iid)
@@ -151,8 +178,13 @@ export async function comment(ctx: Ctx, input: CommentInput): Promise<string> {
     const shown = bool(input.unresolvedOnly) ? views.filter((v) => v.resolved === false) : views
     return clip(json({ discussions: shown, ...more(page) }), 'pass unresolvedOnly or a smaller perPage')
   }
+  if (action === 'drafts') {
+    const page = await ctx.api.page(`/merge_requests/${iid}/draft_notes`, paging(input, 100))
+    return clip(json({ drafts: items<DraftNote>(page).map(draftView), ...more(page) }), 'pass a smaller perPage')
+  }
   // every other action writes: only on the token's own MR unless allowOthers
   const mr = await writable<Mr>(ctx, iid, input.allowOthers)
+  if (asDraft) return draft(ctx, iid, mr, action, text, d, note, at)
   switch (action) {
     case 'comment':
       return json({ note: ((await ctx.api.send('POST', `/merge_requests/${iid}/notes`, { body: text })) as Note).id })
@@ -160,8 +192,10 @@ export async function comment(ctx: Ctx, input: CommentInput): Promise<string> {
       const added = (await ctx.api.send('POST', `/merge_requests/${iid}/discussions/${d}/notes`, { body: text })) as Note
       return json({ discussion: d, note: added.id })
     }
-    case 'line':
-      return line(ctx, iid, mr, at!, text)
+    case 'line': {
+      const added = (await ctx.api.send('POST', `/merge_requests/${iid}/discussions`, { body: text, position: await position(ctx, iid, mr, at!) })) as Discussion
+      return json(discussionView(added))
+    }
     case 'edit':
       await ctx.api.send('PUT', `/merge_requests/${iid}/notes/${note}`, { body: text })
       return `Note ${note} edited.`
@@ -169,5 +203,12 @@ export async function comment(ctx: Ctx, input: CommentInput): Promise<string> {
     case 'unresolve':
       await ctx.api.send('PUT', `/merge_requests/${iid}/discussions/${d}`, { resolved: action === 'resolve' })
       return `Discussion ${d} ${action}d.`
+    case 'publish':
+      if (note !== undefined) {
+        await ctx.api.send('PUT', `/merge_requests/${iid}/draft_notes/${note}/publish`)
+        return `Draft note ${note} published.`
+      }
+      await ctx.api.send('POST', `/merge_requests/${iid}/draft_notes/bulk_publish`)
+      return `Every draft note of yours on !${iid} published.`
   }
 }
