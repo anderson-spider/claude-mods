@@ -39,12 +39,13 @@ declare module 'claude-code' {
       allowProtectedTarget?: boolean
     }
     mcp__gitlab__gitlab_mr_comment: {
-      action: 'list' | 'unresolved' | 'comment' | 'reply' | 'line' | 'edit' | 'resolve' | 'unresolve'
+      action: 'list' | 'unresolved' | 'drafts' | 'comment' | 'reply' | 'line' | 'edit' | 'resolve' | 'unresolve' | 'publish'
       project?: string
       iid?: number
       body?: string
       discussionId?: string
       noteId?: number
+      draft?: boolean
       path?: string
       line?: number
       oldLine?: number
